@@ -42,6 +42,7 @@ read-only, at connect and at every Safe Copy refresh:
 | Prepared transactions | `max_prepared_transactions` used by the app | 2PC not offered on branches |
 | ORM / client (optional, declared by the customer) | project setting | Tested: Rails 8.1, Django 5.2, Prisma 6, SQLAlchemy 2, node-postgres |
 | Migration pattern (optional) | `schema_migrations`, `django_migrations`, `_prisma_migrations` present | Confirms the framework lifecycle the branch will run |
+| Host runtime libraries | `pgrust_runtime_status().libraries` on each PGX host (`pgrun-interface.md`) | libxml2 (the `xml` type, `query_to_xml`, `xpath`, `xmltable`) and ICU are loaded with `dlopen` at run time, not linked. A host missing one serves a subset of PostgreSQL that no source-side input reveals: the schema restores, the client fails later. |
 
 Built-in extensions in v0.1 (`crates/contrib`): amcheck, auto_explain,
 bloom, btree_gin, btree_gist, citext, cube, dblink, earthdistance,
@@ -75,6 +76,23 @@ only the first.
    than PGX's.
 6. **`feature_unsupported`.** Publications or subscriptions are needed on
    the branch, or the application declares two-phase commit.
+
+7. **`host_library_missing`.** A placement target whose runtime reports
+   `libraries.libxml2.available = false` or `libraries.icu.available =
+   false`. This is a host rule, not a source rule: the database verdict is
+   unchanged and the host leaves the placement pool until the library is
+   installed (Debian/Ubuntu `libxml2`, called `libxml2-16` from Ubuntu
+   25.10; `libicu*`). Recorded from the PGRun beta: the row-count idiom
+   `xpath('/row/cnt/text()', query_to_xml(...))` failed on a PGX host with
+   `could not dlopen libxml2.so.2` while every other check (`\gexec`,
+   catalog queries, temp tables, DDL, rollback) matched PostgreSQL.
+   `query_to_xml` itself builds text and never needs libxml2; `xpath`,
+   `xmltable`, `xml_is_well_formed` and `xml` input do. libxml2 2.14
+   renamed its SONAME from `libxml2.so.2` to `libxml2.so.16` and PGX 0.3
+   probed only the old name, so Ubuntu 26.04 hosts had the library and
+   still failed. PGX now probes both names, raises SQLSTATE 0A000
+   `unsupported XML feature` with a hint instead of an internal error when
+   neither loads, and reports the probe in `pgrust_runtime_status()`.
 
 If no rule fails, the result is `PGX_COMPATIBLE`. Optional checks add
 warnings, never a refusal:
@@ -123,6 +141,10 @@ re-runs it inline:
   unchanged.
 - A branch keeps its engine for life. A changed verdict applies to new
   branches only.
+- A host is eligible for `engine = pgx` placement only while its
+  `pgrust_runtime_status().libraries` reports every library available.
+  pgx-agent's `Status()` carries the field, so a misconfigured host is
+  excluded before it serves a branch.
 - If a PGX branch fails at runtime on a feature the gate did not catch,
   PGRun records the failure against the gate (to add a rule) and offers
   the customer a re-create on `engine = postgres`.

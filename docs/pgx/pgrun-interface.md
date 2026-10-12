@@ -18,7 +18,7 @@ socket. No shell, no log parsing.
 | Exists / status of one database | `SELECT oid, datistemplate FROM pg_database WHERE datname = $1` and `SELECT count(*) FROM pg_stat_activity WHERE datname = $1` | |
 | List databases | `SELECT datname FROM pg_database WHERE datname LIKE '<prefix>%'` | |
 | Branch credentials | `CREATE ROLE b_x LOGIN PASSWORD '…'`; `GRANT CONNECT ON DATABASE d TO b_x`; `ALTER DATABASE d OWNER TO b_x` | Ordinary roles are cluster-wide in PostgreSQL. Revoke = `DROP ROLE` after `REASSIGN OWNED`/`DROP DATABASE`. pg_hba decides who can connect to which database. |
-| Runtime health | `SELECT 1`; `SELECT pgrust_runtime_status()` | |
+| Runtime health | `SELECT 1`; `SELECT pgrust_runtime_status()` | Check `libraries.*.available` once per host: a false value is a host configuration error, not a runtime fault. |
 | Runtime capacity and memory | `SELECT pgrust_runtime_status()` | JSON, below. |
 | Active queries | `SELECT datname, pid, state, query_start, wait_event FROM pg_stat_activity` | Standard view. |
 | Template status | `SELECT datistemplate, datallowconn FROM pg_database WHERE datname = $1` | Sealed = `datistemplate AND NOT datallowconn`. |
@@ -36,7 +36,9 @@ Field names are a stable interface: fields may be added, never renamed.
            "retired_session_roots_pending":3,"retired_session_roots_reclaimed":24151},
  "threads":9,"connections":42,
  "databases":{"total":1003,"ephemeral":998,"spares":8,"pinned":2},
- "janitor":{"prefix":"tdb_","pool_size":8,"pending_mints":0}}
+ "janitor":{"prefix":"tdb_","pool_size":8,"pending_mints":0},
+ "libraries":{"libxml2":{"available":true,"library":"libxml2.so.16","version":"21502","error":null},
+              "icu":{"available":true,"unicode_version":"16.0"}}}
 ```
 
 - `rss_bytes`, `pss_bytes`: the runtime process. PSS is the number to sum
@@ -47,6 +49,14 @@ Field names are a stable interface: fields may be added, never renamed.
   thread's join / freed so far (`lifecycle-memory.md`). `pending` should
   stay near the number of live sessions.
 - `databases.ephemeral` excludes warm-pool spares and templates.
+- `libraries`: shared libraries the runtime binds with `dlopen` at run time
+  instead of linking: libxml2 (the `xml` type, `query_to_xml`, `xpath`,
+  `xmltable`) and ICU (ICU collations). `available: false` means this host
+  serves a subset of PostgreSQL: XML functions raise `unsupported XML
+  feature` (SQLSTATE 0A000) with a hint naming the library, and `error` holds
+  the probe failure. Placement must skip such a host (`compatibility-gate.md`,
+  `host_library_missing`). `version` is libxml2's own `xmlParserVersion`
+  ("21502" = 2.15.2).
 
 ## Recommended host architecture
 

@@ -322,6 +322,15 @@ cargo build --release --locked --bin postgres
 The server binary is `target/release/postgres`. Release builds refuse to
 compile without RE2 on purpose: the fallback regex engine is much slower.
 
+At run time the server loads two libraries with `dlopen` rather than
+linking them: libxml2 for the `xml` type and SQL/XML functions, and ICU for
+ICU collations. The PostgreSQL 18 packages above install both. A host
+without libxml2 still starts, but XML functions raise `unsupported XML
+feature` (SQLSTATE 0A000) with a hint naming the library, and
+`pgrust_runtime_status()` reports `libraries.libxml2.available = false`.
+Debian/Ubuntu package: `libxml2` (`libxml2-16` from Ubuntu 25.10); macOS
+ships libxml2 with the system.
+
 ### Run a PGX runtime
 
 ```bash

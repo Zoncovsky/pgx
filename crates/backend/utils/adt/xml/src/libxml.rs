@@ -1,10 +1,13 @@
 //! dlopen/dlsym binding to the system libxml2, resolved once (ICU-lane
 //! precedent: no build-time dep; pods only guarantee the runtime .so).
-//! Unloadable/missing symbol = loud panic, never a no-libxml fallback.
+//! Unloadable/missing symbol = the C "built without libxml" ERROR (0A000)
+//! with a HINT naming the host package, never a silent no-libxml fallback.
+//! `status()` reports the probe for `pgrust_runtime_status()`.
 
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 
-use core::ffi::{c_char, c_int, c_long, c_void};
+use core::ffi::{c_char, c_int, c_long, c_void, CStr};
+use ::types_error::{PgError, ERRCODE_FEATURE_NOT_SUPPORTED};
 use std::sync::OnceLock;
 
 pub type c_uchar = u8;
@@ -148,6 +151,10 @@ pub struct xmlParserInputHdr {
 }
 
 pub struct LibXml2 {
+    /// The candidate name that dlopen resolved (`CANDIDATES`).
+    pub library: &'static str,
+    /// libxml2's own `xmlParserVersion` ("21502" = 2.15.2), if exported.
+    pub version: Option<String>,
     pub xmlInitParser: unsafe extern "C" fn(),
     xmlFreeVar: *const xmlFreeFunc,
     pub xmlStrdup: unsafe extern "C" fn(cur: *const c_uchar) -> *mut c_uchar,
@@ -279,23 +286,87 @@ unsafe impl Send for LibXml2 {}
 
 static LIBXML: OnceLock<Result<&'static LibXml2, String>> = OnceLock::new();
 
+/// The libxml2 table. Unloadable: raises the `unavailable_error` ERROR
+/// through the panic path (`PgError` payload, `pg_error_from_panic`), the
+/// shape C gives for a build without libxml.
 pub fn xml2() -> &'static LibXml2 {
     match LIBXML.get_or_init(load) {
         Ok(api) => api,
-        Err(e) => panic!("adt_xml libxml2: {e}"),
+        Err(e) => std::panic::panic_any(Box::new(unavailable_error(e))),
     }
 }
 
+/// What a loaded libxml2 looks like to `pgrust_runtime_status()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Loaded {
+    pub library: &'static str,
+    pub version: Option<&'static str>,
+}
+
+/// Non-panicking probe for the control plane: Ok names the library that
+/// loaded, Err is the probe failure (`probe_failure_message` or a missing
+/// symbol). Resolves once and caches like `xml2()`.
+pub fn status() -> Result<Loaded, &'static str> {
+    match LIBXML.get_or_init(load) {
+        Ok(api) => Ok(Loaded { library: api.library, version: api.version.as_deref() }),
+        Err(e) => Err(e.as_str()),
+    }
+}
+
+/// C's `NO_XML_SUPPORT()` ERROR for a host without a loadable libxml2:
+/// same message, SQLSTATE and DETAIL as a PostgreSQL built without
+/// `--with-libxml`, plus a HINT saying what the host is missing. The
+/// previous shape was a bare backend panic ("could not dlopen libxml2.so.2")
+/// reported as an internal error.
+pub fn unavailable_error(detail: &str) -> PgError {
+    PgError::error("unsupported XML feature")
+        .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED)
+        .with_detail("This functionality requires the server to be built with libxml support.")
+        .with_hint(format!(
+            "PGX binds libxml2 at run time and {detail}. Install the libxml2 shared library \
+             on this host (Debian/Ubuntu package libxml2, named libxml2-16 from Ubuntu 25.10)."
+        ))
+}
+
+/// dlopen candidates, in probe order. libxml2 2.14 changed the SONAME from
+/// `libxml2.so.2` to `libxml2.so.16`; Ubuntu 25.10+ (26.04 LTS) ship only
+/// `.so.16`, Debian 13 and older Ubuntu only `.so.2`, and the bare
+/// `libxml2.so` symlink comes from the -dev package, which a runtime host
+/// does not install. Probing `.so.2` alone was the "could not dlopen
+/// libxml2.so.2" failure of every XML function on a PGX host.
+#[cfg(all(not(target_family = "wasm"), not(target_os = "macos")))]
+pub const CANDIDATES: &[&CStr] = &[c"libxml2.so.16", c"libxml2.so.2", c"libxml2.so"];
+
+// macOS: the system libxml2 (dyld shared cache) is 2.9 = `libxml2.2.dylib`;
+// a Homebrew libxml2 >= 2.14 is `libxml2.16.dylib`, keg-only, so its lib
+// directory is probed by path (arm64, then x86).
+#[cfg(target_os = "macos")]
+pub const CANDIDATES: &[&CStr] = &[
+    c"libxml2.2.dylib",
+    c"libxml2.16.dylib",
+    c"libxml2.dylib",
+    c"/opt/homebrew/opt/libxml2/lib/libxml2.dylib",
+    c"/usr/local/opt/libxml2/lib/libxml2.dylib",
+];
+
+#[cfg(target_family = "wasm")]
+pub const CANDIDATES: &[&CStr] = &[];
+
+pub fn probe_failure_message() -> String {
+    let names: Vec<&str> = CANDIDATES.iter().map(|c| c.to_str().unwrap_or("?")).collect();
+    format!("could not dlopen {}", names.join(" / "))
+}
+
 #[cfg(not(target_family = "wasm"))]
-fn open_lib() -> Result<*mut c_void, String> {
-    for name in [c"libxml2.so.2", c"libxml2.so", c"libxml2.2.dylib"] {
-        // SAFETY: literal is NUL-terminated.
+fn open_lib() -> Result<(*mut c_void, &'static str), String> {
+    for name in CANDIDATES {
+        // SAFETY: CStr literal is NUL-terminated.
         let h = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW) };
         if !h.is_null() {
-            return Ok(h);
+            return Ok((h, name.to_str().unwrap_or("?")));
         }
     }
-    Err("could not dlopen libxml2.so.2 / libxml2.so / libxml2.2.dylib".to_string())
+    Err(probe_failure_message())
 }
 
 // wasm32: no dynamic loading on wasm32-wasip1 (wasi-libc ships no dlopen),
@@ -310,7 +381,19 @@ fn load() -> Result<&'static LibXml2, String> {
 
 #[cfg(not(target_family = "wasm"))]
 fn load() -> Result<&'static LibXml2, String> {
-    let handle = open_lib()?;
+    let (handle, library) = open_lib()?;
+    // xmlParserVersion is a `const char *` data symbol (parser.h): the
+    // library's own version as "MMmmpp" digits. Optional — never a failure.
+    let version = {
+        // SAFETY: NUL-terminated name; handle is a live dlopen handle.
+        let p = unsafe { libc::dlsym(handle, c"xmlParserVersion".as_ptr()) } as *const *const c_char;
+        // SAFETY: a non-null xmlParserVersion points at a NUL-terminated
+        // static string owned by libxml2 for the life of the process.
+        unsafe {
+            (!p.is_null() && !(*p).is_null())
+                .then(|| CStr::from_ptr(*p).to_string_lossy().into_owned())
+        }
+    };
     macro_rules! resolve {
         ($name:ident) => {{
             let sym = concat!(stringify!($name), "\0");
@@ -333,6 +416,8 @@ fn load() -> Result<&'static LibXml2, String> {
         p as *const xmlFreeFunc
     };
     Ok(Box::leak(Box::new(LibXml2 {
+        library,
+        version,
         xmlInitParser: resolve!(xmlInitParser),
         xmlFreeVar,
         xmlStrdup: resolve!(xmlStrdup),
@@ -418,6 +503,69 @@ pub unsafe fn buffer_to_vec(buf: *mut xmlBuffer) -> Vec<u8> {
             Vec::new()
         } else {
             std::slice::from_raw_parts(content, len).to_vec()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // libxml2 2.14 changed the SONAME from .so.2 to .so.16; Ubuntu 25.10+
+    // ships only libxml2.so.16 and the bare libxml2.so belongs to the -dev
+    // package. A runtime host must resolve with neither .so.2 nor -dev.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn probes_new_soname_before_old_and_bare() {
+        let names: Vec<&str> = CANDIDATES.iter().map(|c| c.to_str().unwrap()).collect();
+        let pos = |n: &str| names.iter().position(|x| *x == n).unwrap_or_else(|| panic!("{n} not probed"));
+        assert!(pos("libxml2.so.16") < pos("libxml2.so.2"));
+        assert!(pos("libxml2.so.2") < pos("libxml2.so"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn probes_system_then_new_dylib_then_homebrew() {
+        let names: Vec<&str> = CANDIDATES.iter().map(|c| c.to_str().unwrap()).collect();
+        let pos = |n: &str| names.iter().position(|x| *x == n).unwrap_or_else(|| panic!("{n} not probed"));
+        assert!(pos("libxml2.2.dylib") < pos("libxml2.16.dylib"));
+        assert!(names.iter().any(|n| n.starts_with("/opt/homebrew/")));
+    }
+
+    // A missing library is C's "built without libxml" (0A000 + the same
+    // DETAIL), never an internal error; the HINT names the package to install.
+    #[test]
+    fn unavailable_is_feature_not_supported_with_install_hint() {
+        let e = unavailable_error("could not dlopen libxml2.so.16");
+        assert_eq!(e.sqlstate(), ::types_error::ERRCODE_FEATURE_NOT_SUPPORTED);
+        assert_eq!(e.message(), "unsupported XML feature");
+        assert_eq!(
+            e.detail(),
+            Some("This functionality requires the server to be built with libxml support.")
+        );
+        let hint = e.hint().expect("hint");
+        assert!(hint.contains("could not dlopen libxml2.so.16"), "{hint}");
+        assert!(hint.contains("libxml2"), "{hint}");
+    }
+
+    // The error message lists every probed name so an operator can see what
+    // the host lacks.
+    #[test]
+    fn probe_failure_lists_every_candidate() {
+        let msg = probe_failure_message();
+        for c in CANDIDATES {
+            assert!(msg.contains(c.to_str().unwrap()), "{msg}");
+        }
+    }
+
+    // On a host with libxml2 the status is Ok and names the library that
+    // loaded; without it, Err carries the probe message. Either way the probe
+    // never panics — pgrust_runtime_status() reports it.
+    #[test]
+    fn status_never_panics() {
+        match status() {
+            Ok(loaded) => assert!(CANDIDATES.iter().any(|c| c.to_str().unwrap() == loaded.library)),
+            Err(e) => assert!(e.contains("could not dlopen"), "{e}"),
         }
     }
 }

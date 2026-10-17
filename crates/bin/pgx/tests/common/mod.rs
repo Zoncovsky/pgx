@@ -128,7 +128,7 @@ impl Pgx {
     pub fn psql(&self, db: &str, sql: &str) -> Run {
         let psql = find_psql();
         let out = Command::new(psql)
-            .args(["-X", "-v", "ON_ERROR_STOP=1", "-h", &self.sock_dir().to_string_lossy(), "-p", &self.port.to_string(), "-U", "postgres", "-d", db, "-Atc", sql])
+            .args(["-X", "-q", "-v", "ON_ERROR_STOP=1", "-h", &self.sock_dir().to_string_lossy(), "-p", &self.port.to_string(), "-U", "postgres", "-d", db, "-Atc", sql])
             .output()
             .expect("spawn psql");
         Run::from(out)
@@ -137,7 +137,7 @@ impl Pgx {
     pub fn psql_tcp(&self, db: &str, password: &str, sql: &str) -> Run {
         let psql = find_psql();
         let out = Command::new(psql)
-            .args(["-X", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-p", &self.port.to_string(), "-U", "postgres", "-d", db, "-Atc", sql])
+            .args(["-X", "-q", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-p", &self.port.to_string(), "-U", "postgres", "-d", db, "-Atc", sql])
             .env("PGPASSWORD", password)
             .output()
             .expect("spawn psql");

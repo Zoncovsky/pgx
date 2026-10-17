@@ -7,6 +7,7 @@ mod errors;
 mod fsdetect;
 mod fsutil;
 mod layout;
+mod names;
 mod out;
 mod pgwire;
 mod process;

@@ -120,7 +120,7 @@ impl Pgx {
 
     /// Any `postgres` process whose command line names this home's data dir.
     pub fn engine_pids(&self) -> Vec<u32> {
-        let out = Command::new("pgrep").args(["-f", &format!("-D {}", self.home.join("data").display())]).output().unwrap();
+        let out = Command::new("pgrep").args(["-f", "--", &format!("postgres .*-D {}( |$)", self.home.join("data").display())]).output().unwrap();
         String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect()
     }
 

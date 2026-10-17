@@ -1,8 +1,9 @@
+use crate::cli::ExitCode;
 use crate::errors::Result;
 use crate::layout::Install;
 use crate::out::Out;
 
-pub fn run(out: &Out) -> Result<()> {
+pub fn run(out: &Out) -> Result<ExitCode> {
     let install = Install::discover()?;
     let d = install.dist_info().unwrap_or_default();
     let pgx_version = if d.pgx_version.is_empty() || d.pgx_version == "unknown" { env!("CARGO_PKG_VERSION").to_string() } else { d.pgx_version.clone() };
@@ -18,5 +19,5 @@ pub fn run(out: &Out) -> Result<()> {
             "install_prefix": install.prefix,
         }),
     );
-    Ok(())
+    Ok(ExitCode::Ok)
 }

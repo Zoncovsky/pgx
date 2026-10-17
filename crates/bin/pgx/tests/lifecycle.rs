@@ -154,3 +154,168 @@ fn incomplete_installation_is_exit_7() {
     assert_eq!(r.code, 7, "{}", r.all());
     assert!(r.stderr.contains("base-cluster"), "{}", r.stderr);
 }
+
+// ---------------------------------------------------------------- start / stop / status
+
+#[test]
+fn start_stop_roundtrip_select_1() {
+    let p = Pgx::new();
+    p.init_ok();
+    let r = p.run(&["start"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.all(), p.log_tail());
+    assert!(r.stdout.contains(&format!("port {}", p.port)) || r.stdout.contains(&p.port.to_string()), "{}", r.stdout);
+    let pids = p.engine_pids();
+    assert_eq!(pids.len(), 1, "expected one engine, got {pids:?}");
+    let q = p.psql("postgres", "SELECT 1");
+    assert_eq!(q.code, 0, "{}", q.all());
+    assert_eq!(q.stdout.trim(), "1");
+    let q = p.psql_tcp("postgres", &p.password(), "SELECT host(inet_server_addr())");
+    assert_eq!(q.code, 0, "{}", q.all());
+    assert_eq!(q.stdout.trim(), "127.0.0.1");
+    let bad = p.psql_tcp("postgres", "wrong", "SELECT 1");
+    assert_ne!(bad.code, 0, "wrong password must be rejected");
+    let r = p.run(&["stop"]);
+    assert_eq!(r.code, 0, "{}", r.all());
+    assert!(p.engine_pids().is_empty(), "stop left an engine");
+    assert!(!p.home.join("data/postmaster.pid").exists(), "stop left postmaster.pid");
+}
+
+#[test]
+fn start_twice_is_noop() {
+    let p = Pgx::new();
+    p.init_ok();
+    p.start_ok();
+    let first = p.engine_pids();
+    let r = p.run(&["start"]);
+    assert_eq!(r.code, 0, "{}", r.all());
+    assert!(r.stdout.contains("already running"), "{}", r.stdout);
+    assert_eq!(p.engine_pids(), first, "second start changed the engine");
+}
+
+#[test]
+fn stop_when_not_running_is_ok() {
+    let p = Pgx::new();
+    p.init_ok();
+    let r = p.run(&["stop"]);
+    assert_eq!(r.code, 0, "{}", r.all());
+    assert!(r.stdout.contains("not running"), "{}", r.stdout);
+}
+
+#[test]
+fn status_reports_running_and_stopped() {
+    let p = Pgx::new();
+    p.init_ok();
+    let j = p.run(&["--json", "status"]).json();
+    assert_eq!(j["running"], false);
+    assert_eq!(j["port"], p.port);
+    let r = p.run(&["status"]);
+    assert_eq!(r.code, 3, "stopped status exits 3: {}", r.all());
+    p.start_ok();
+    let r = p.run(&["status"]);
+    assert_eq!(r.code, 0, "{}", r.all());
+    assert!(r.stdout.contains("running"), "{}", r.stdout);
+    let j = p.run(&["--json", "status"]).json();
+    assert_eq!(j["running"], true);
+    assert_eq!(j["pid"], p.engine_pids()[0]);
+    assert_eq!(j["port"], p.port);
+    assert_eq!(j["durability"], "ephemeral");
+    assert!(j["databases"].as_u64().unwrap() >= 1, "{j}");
+    assert!(j["uptime_s"].as_u64().is_some(), "{j}");
+    assert!(j["memory_rss_bytes"].as_u64().unwrap() > 1_000_000, "{j}");
+    assert_eq!(j["socket_dir"], p.sock_dir().to_string_lossy().as_ref());
+    assert!(j["libraries"]["libxml2"]["available"].is_boolean(), "{j}");
+}
+
+#[test]
+fn stale_pid_reused_by_other_process() {
+    let p = Pgx::new();
+    p.init_ok();
+    // A pid that is alive but is not our engine: this test process.
+    let me = std::process::id();
+    std::fs::write(p.home.join("data/postmaster.pid"), format!("{me}\n{}\n1\n{}\n{}\n\n  0 0\nready\n", p.home.join("data").display(), p.port, p.sock_dir().display())).unwrap();
+    let j = p.run(&["--json", "status"]).json();
+    assert_eq!(j["running"], false, "a foreign pid must not count as running: {j}");
+    let r = p.run(&["start"]);
+    assert_eq!(r.code, 0, "start must clear the stale pid file: {}\n{}", r.all(), p.log_tail());
+    assert_eq!(p.engine_pids().len(), 1);
+    assert!(std::fs::read_to_string(p.home.join("data/postmaster.pid")).unwrap().starts_with(&p.engine_pids()[0].to_string()));
+}
+
+#[test]
+fn stale_pid_of_dead_process_is_cleared() {
+    let p = Pgx::new();
+    p.init_ok();
+    std::fs::write(p.home.join("data/postmaster.pid"), format!("999999\n{}\n1\n{}\n{}\n\n  0 0\nready\n", p.home.join("data").display(), p.port, p.sock_dir().display())).unwrap();
+    let r = p.run(&["start"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.all(), p.log_tail());
+}
+
+#[test]
+fn port_conflict_is_exit_4() {
+    let p = Pgx::new();
+    p.init_ok();
+    let busy = std::net::TcpListener::bind(("127.0.0.1", p.port)).unwrap();
+    let r = p.run(&["start"]);
+    drop(busy);
+    assert_eq!(r.code, 4, "{}", r.all());
+    assert!(r.stderr.contains("in use"), "{}", r.stderr);
+    assert!(p.engine_pids().is_empty(), "a failed start must leave no engine");
+    assert!(!p.home.join("data/postmaster.pid").exists());
+}
+
+#[test]
+fn concurrent_start_single_server() {
+    let p = Pgx::new();
+    p.init_ok();
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let mut c = p.cmd(&["start"]);
+            std::thread::spawn(move || common::Run::from(c.output().unwrap()))
+        })
+        .collect();
+    let runs: Vec<common::Run> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    for r in &runs {
+        assert_eq!(r.code, 0, "{}", r.all());
+    }
+    assert_eq!(p.engine_pids().len(), 1, "concurrent starts produced {} engines", p.engine_pids().len());
+    assert!(runs.iter().filter(|r| r.stdout.contains("already running")).count() >= 1, "no start reported the other: {:?}", runs.iter().map(|r| r.stdout.clone()).collect::<Vec<_>>());
+}
+
+#[test]
+fn restart_preserves_data() {
+    let p = Pgx::new();
+    p.init_ok();
+    p.start_ok();
+    assert_eq!(p.psql("postgres", "CREATE TABLE keep(v text); INSERT INTO keep VALUES ('survives')").code, 0);
+    let r = p.run(&["restart"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.all(), p.log_tail());
+    let q = p.psql("postgres", "SELECT v FROM keep");
+    assert_eq!(q.stdout.trim(), "survives", "{}", q.all());
+    p.stop_ok();
+    p.start_ok();
+    let q = p.psql("postgres", "SELECT v FROM keep");
+    assert_eq!(q.stdout.trim(), "survives", "data lost across stop/start: {}", q.all());
+}
+
+#[test]
+fn stop_leaves_no_orphan_and_force_kills() {
+    let p = Pgx::new();
+    p.init_ok();
+    p.start_ok();
+    let pid = p.engine_pids()[0];
+    let r = p.run(&["stop", "--force"]);
+    assert_eq!(r.code, 0, "{}", r.all());
+    assert!(!p.engine_pids().contains(&pid));
+    assert!(p.engine_pids().is_empty());
+}
+
+#[test]
+fn start_survives_cli_parent_exit_and_terminal_hangup() {
+    // The engine must be in its own session: a SIGHUP to the CLI's process group must not reach it.
+    let p = Pgx::new();
+    p.init_ok();
+    p.start_ok();
+    let pid = p.engine_pids()[0];
+    let sid = unsafe { libc::getsid(pid as i32) };
+    assert_eq!(sid, pid as i32, "engine should lead its own session (sid {sid}, pid {pid})");
+}

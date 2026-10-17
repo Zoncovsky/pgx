@@ -24,7 +24,7 @@ fn main() {
         }
     };
     let code = match run(global, command) {
-        Ok(()) => ExitCode::Ok,
+        Ok(code) => code,
         Err(e) => {
             if global.json {
                 println!("{}", e.to_json());
@@ -37,12 +37,12 @@ fn main() {
     std::process::exit(code as i32);
 }
 
-fn run(global: cli::Global, command: Command) -> Result<()> {
+fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
     let out = out::Out::new(global.json);
     match command {
         Command::Help => {
             print!("{}", cli::help_text());
-            Ok(())
+            Ok(ExitCode::Ok)
         }
         Command::Version => cmd::version::run(&out),
         Command::Init { port, durability, force } => cmd::init::run(&out, port, durability, force),

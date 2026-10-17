@@ -39,7 +39,7 @@ pub fn socket_path_len(sock_dir: &Path, port: u16) -> usize {
     sock_dir.join(format!(".s.PGSQL.{port}")).as_os_str().len()
 }
 
-pub fn run(out: &Out, port: Option<u16>, durability: Option<String>, force: bool) -> Result<()> {
+pub fn run(out: &Out, port: Option<u16>, durability: Option<String>, force: bool) -> Result<ExitCode> {
     let install = Install::discover()?;
     install.require_complete()?;
     let home = Home::resolve();
@@ -130,7 +130,7 @@ pub fn run(out: &Out, port: Option<u16>, durability: Option<String>, force: bool
             "socket_dir": sock_dir, "block_clone": block_clone, "config": home.config_file,
         }),
     );
-    Ok(())
+    Ok(ExitCode::Ok)
 }
 
 fn write(path: &Path, text: &str) -> Result<()> {

@@ -146,10 +146,6 @@ impl Client<UnixStream> {
         Client::handshake(stream, user, database)
     }
 
-    pub fn set_timeout(&mut self, timeout: Option<Duration>) -> Result<(), WireError> {
-        self.stream.set_read_timeout(timeout)?;
-        Ok(())
-    }
 }
 
 impl<S: Read + Write> Client<S> {
@@ -180,6 +176,7 @@ impl<S: Read + Write> Client<S> {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn parameter(&self, name: &str) -> Option<&str> {
         self.parameters.get(name).map(String::as_str)
     }

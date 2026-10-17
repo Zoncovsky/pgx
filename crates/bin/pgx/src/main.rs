@@ -47,6 +47,7 @@ fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
         }
         Command::Version => cmd::version::run(&out),
         Command::Init { port, durability, force } => cmd::init::run(&out, port, durability, force),
+        Command::Doctor => cmd::doctor::run(&out),
         other => {
             let home = layout::Home::resolve();
             if !home.is_initialized() {
@@ -62,8 +63,7 @@ fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
                 Command::Clone { source, target } => cmd::db::clone(&out, &source, &target),
                 Command::Ls => cmd::db::ls(&out),
                 Command::Url { name, socket } => cmd::db::url(&out, &name, socket),
-                Command::Doctor => cmd::doctor::run(&out),
-                Command::Help | Command::Version | Command::Init { .. } => unreachable!(),
+                Command::Help | Command::Version | Command::Init { .. } | Command::Doctor => unreachable!(),
             }
         }
     }

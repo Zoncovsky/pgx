@@ -48,3 +48,7 @@ wire-diff-out/
 .tpchconv/
 .tpch22/
 __pycache__/
+
+# local tooling scratch
+.worktrees/
+.superpowers/

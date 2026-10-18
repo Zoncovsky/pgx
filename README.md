@@ -323,6 +323,25 @@ and troubleshooting are under [`docs/pgx/local-dev/`](docs/pgx/local-dev/); the
 test matrix and release decision are in
 [`docs/pgx/local-dev/validation-report.md`](docs/pgx/local-dev/validation-report.md).
 
+### Branching and temporary databases
+
+Clones are copy-on-write branches, and any database can carry a TTL so it
+cleans itself up — a branch per agent, pull request or CI job that you never
+have to remember to delete.
+
+```bash
+pgx clone myapp pr-123 --ttl 30m   # a 30-minute branch of myapp for one PR
+pgx create scratch --ttl 2h        # a throwaway database, gone in 2 hours
+pgx ls                             # shows each database's TTL and expiry
+pgx ttl pr-123 unlimited           # changed your mind — keep it for good
+```
+
+Databases created without `--ttl` are permanent. A background supervisor
+drops each temporary database shortly after its deadline, never touches
+permanent or system databases, and resumes cleanup automatically after a
+`pgx stop` / `pgx start`. Details and the identity-safety model are in
+[`docs/pgx/local-dev/ttl.md`](docs/pgx/local-dev/ttl.md).
+
 ### Build from source
 
 You need the Rust toolchain (`rust-toolchain.toml` pins Rust 1.96.0;

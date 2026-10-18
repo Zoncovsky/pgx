@@ -131,6 +131,9 @@ fn start_locked(out: &Out, ctx: &Ctx) -> Result<StartOutcome> {
             return Err(e);
         }
     }
+    // Bring up the background TTL cleanup worker (single-instance; a redundant
+    // spawn exits immediately). It runs detached and outlives this CLI process.
+    spawn_supervisor(&ctx.home);
     // The child lives on in its own session; the CLI exits without reaping it.
     Ok(StartOutcome {
         started: true,
@@ -172,6 +175,49 @@ fn emit_start(out: &Out, ctx: &Ctx, o: &StartOutcome, restarted: bool) {
 /// `pgx serve`: run the engine in the FOREGROUND, replacing this process, so it
 /// can be PID 1 in a container or a systemd simple service. Initialises first
 /// if $PGX_HOME is empty, reading PGX_PORT / PGX_DURABILITY / PGX_LISTEN like
+/// Spawn the background TTL supervisor, detached in its own session so it
+/// outlives this CLI invocation and survives a terminal hangup. Single-instance
+/// by its own lock, so a redundant spawn simply exits; callers need not check.
+pub fn spawn_supervisor(home: &crate::layout::Home) {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut cmd = Command::new(exe);
+    cmd.arg("supervise")
+        .env("PGX_HOME", &home.root)
+        .stdin(Stdio::null());
+    if let Some(parent) = home.log_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&home.log_file)
+    {
+        Ok(f) => match f.try_clone() {
+            Ok(f2) => {
+                cmd.stdout(Stdio::from(f)).stderr(Stdio::from(f2));
+            }
+            Err(_) => {
+                cmd.stdout(Stdio::null()).stderr(Stdio::null());
+            }
+        },
+        Err(_) => {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+    }
+    // SAFETY: setsid() in the child only; no allocation or shared-state access.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let _ = cmd.spawn();
+}
+
 /// the Docker entrypoint expects.
 pub fn serve(out: &Out) -> Result<ExitCode> {
     use crate::layout::Home;
@@ -204,6 +250,9 @@ pub fn serve(out: &Out) -> Result<ExitCode> {
     )
     .map_err(|e| PgxError::io("cannot write", &pgx_conf, &e))?;
     std::fs::create_dir_all(&sock_dir).map_err(|e| PgxError::io("cannot create", &sock_dir, &e))?;
+    // Start the TTL worker before we exec the engine (this process is replaced).
+    // It polls until the engine accepts connections, then cleans up normally.
+    spawn_supervisor(&ctx.home);
     out.note(&format!(
         "pgx serve: exec engine on port {} (socket {})",
         ctx.config.port,

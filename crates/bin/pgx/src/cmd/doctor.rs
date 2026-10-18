@@ -138,6 +138,92 @@ fn orphan_check(data: &Path, known: &[String]) -> Check {
     )
 }
 
+/// TTL diagnostics: management status, supervisor liveness, metadata validity,
+/// databases awaiting cleanup, and failed cleanups. Read-only — never deletes.
+fn ttl_checks(home: &Home, running: bool) -> Vec<Check> {
+    let store = crate::ttlstore::MetaStore::new(&home.root);
+    let (records, bad) = store.list();
+    let now = crate::fsutil::now_epoch();
+    let mut checks = Vec::new();
+
+    // Supervisor liveness from its pid file (read-only; the lock stays untouched).
+    let sup_pid = std::fs::read_to_string(home.root.join("supervisor.pid"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok());
+    match sup_pid {
+        Some(pid) if process::pid_alive(pid) => checks.push(ok(
+            "ttl_worker",
+            format!("cleanup supervisor running, pid {pid}"),
+        )),
+        _ if records.is_empty() => checks.push(ok(
+            "ttl_worker",
+            "no temporary databases; supervisor idle/not needed",
+        )),
+        _ if running => checks.push(warn(
+            "ttl_worker",
+            "temporary databases exist but no cleanup supervisor is running",
+            "`pgx start` (or `pgx run`) respawns it",
+        )),
+        _ => checks.push(ok(
+            "ttl_worker",
+            "runtime stopped; supervisor exits with it",
+        )),
+    }
+
+    if records.is_empty() {
+        checks.push(ok(
+            "ttl",
+            format!("no TTL-managed databases ({})", store.dir().display()),
+        ));
+    } else {
+        let expired = records.iter().filter(|r| r.is_expired(now)).count();
+        checks.push(ok(
+            "ttl",
+            format!(
+                "{} temporary database(s), {expired} past their deadline awaiting cleanup",
+                records.len()
+            ),
+        ));
+    }
+
+    if !bad.is_empty() {
+        let names: Vec<String> = bad
+            .iter()
+            .map(|(p, e)| format!("{}: {e}", p.display()))
+            .collect();
+        checks.push(warn(
+            "ttl_metadata",
+            format!(
+                "{} unreadable TTL record(s): {}",
+                bad.len(),
+                names.join("; ")
+            ),
+            "a corrupt record is never treated as deletable; remove it by hand if stale",
+        ));
+    }
+
+    let failed: Vec<&crate::ttlstore::TtlRecord> = records
+        .iter()
+        .filter(|r| r.state == crate::ttlstore::State::RetryPending)
+        .collect();
+    if !failed.is_empty() {
+        let names: Vec<String> = failed
+            .iter()
+            .map(|r| format!("{} ({})", r.name, r.last_error.as_deref().unwrap_or("?")))
+            .collect();
+        checks.push(warn(
+            "ttl_cleanup",
+            format!(
+                "{} cleanup(s) failed and will retry: {}",
+                failed.len(),
+                names.join("; ")
+            ),
+            "inspect the runtime log; the database is retried with backoff",
+        ));
+    }
+    checks
+}
+
 pub fn run(out: &Out) -> Result<ExitCode> {
     let mut checks: Vec<Check> = Vec::new();
     let home = Home::resolve();
@@ -323,6 +409,11 @@ pub fn run(out: &Out) -> Result<ExitCode> {
             format!("{port} is in use by another process"),
             "stop that process or `pgx init --force --port N`",
         ));
+    }
+
+    // TTL management.
+    if initialized {
+        checks.extend(ttl_checks(&home, running_pid.is_some()));
     }
 
     // Host resources.

@@ -60,6 +60,8 @@ pub enum Command {
     Status,
     Create {
         name: String,
+        /// `--ttl <dur>`; None means the default (unlimited).
+        ttl: Option<String>,
     },
     Drop {
         name: String,
@@ -68,13 +70,22 @@ pub enum Command {
     Clone {
         source: String,
         target: String,
+        /// `--ttl <dur>`; None means unlimited (TTL is never inherited from the source).
+        ttl: Option<String>,
     },
     Ls,
+    /// `pgx ttl <db>` shows the TTL; `pgx ttl <db> <dur>` sets it (dur may be `unlimited`).
+    Ttl {
+        name: String,
+        value: Option<String>,
+    },
     Url {
         name: String,
         socket: bool,
     },
     Doctor,
+    /// Hidden: the background TTL cleanup worker, spawned by start/run/serve.
+    Supervise,
     Version,
     Help,
 }
@@ -101,7 +112,7 @@ pub fn parse(args: &[String]) -> Result<(Global, Command)> {
         if let Some(flag) = t.strip_prefix("--") {
             if let Some((k, v)) = flag.split_once('=') {
                 flags.push((k, Some(v)));
-            } else if matches!(flag, "port" | "durability") {
+            } else if matches!(flag, "port" | "durability" | "ttl") {
                 let v = tail
                     .get(i + 1)
                     .copied()
@@ -186,10 +197,11 @@ pub fn parse(args: &[String]) -> Result<(Global, Command)> {
             Command::Status
         }
         "create" => {
-            only_flags(&[])?;
-            arity(1, "create <database>")?;
+            only_flags(&["ttl"])?;
+            arity(1, "create <database> [--ttl <duration>]")?;
             Command::Create {
                 name: positional[0].into(),
+                ttl: value("ttl").map(String::from),
             }
         }
         "drop" => {
@@ -201,17 +213,35 @@ pub fn parse(args: &[String]) -> Result<(Global, Command)> {
             }
         }
         "clone" => {
-            only_flags(&[])?;
-            arity(2, "clone <source> <target>")?;
+            only_flags(&["ttl"])?;
+            arity(2, "clone <source> <target> [--ttl <duration>]")?;
             Command::Clone {
                 source: positional[0].into(),
                 target: positional[1].into(),
+                ttl: value("ttl").map(String::from),
             }
         }
         "ls" | "list" => {
             only_flags(&[])?;
             arity(0, "ls")?;
             Command::Ls
+        }
+        "ttl" => {
+            only_flags(&[])?;
+            if positional.is_empty() || positional.len() > 2 {
+                return Err(PgxError::usage(
+                    "usage: pgx ttl <database> [<duration>|unlimited]".to_string(),
+                ));
+            }
+            Command::Ttl {
+                name: positional[0].into(),
+                value: positional.get(1).map(|s| (*s).to_string()),
+            }
+        }
+        "supervise" => {
+            only_flags(&[])?;
+            arity(0, "supervise")?;
+            Command::Supervise
         }
         "url" => {
             only_flags(&["socket"])?;
@@ -258,11 +288,16 @@ Runtime
   pgx status              running?, pid, port, databases, memory
 
 Databases
-  pgx create <database>
+  pgx create <database> [--ttl <dur>]   --ttl makes it temporary (auto-expires)
   pgx drop <database> [--force]     --force terminates connected sessions first
-  pgx clone <source> <target>       copy-on-write where the filesystem supports it
-  pgx ls
+  pgx clone <source> <target> [--ttl <dur>]   copy-on-write where supported; TTL not inherited
+  pgx ls                            name, status, TTL, expires-in
+  pgx ttl <database> [<dur>]        show the TTL, or set it (<dur> or `unlimited`)
   pgx url <database> [--socket]     connection URL (TCP with password, or Unix socket)
+
+  TTL durations: 30s 5m 15m 1h 6h 24h 7d (general s/m/h/d), or `unlimited`
+  (the default). Temporary databases are removed automatically by a background
+  worker; permanent databases are never auto-deleted.
 
 Tools
   pgx doctor              check the installation, data directory, port, storage
@@ -322,7 +357,15 @@ mod tests {
         assert_eq!(
             parse(&args("create myapp")).unwrap().1,
             Command::Create {
-                name: "myapp".into()
+                name: "myapp".into(),
+                ttl: None
+            }
+        );
+        assert_eq!(
+            parse(&args("create agent-1 --ttl 5m")).unwrap().1,
+            Command::Create {
+                name: "agent-1".into(),
+                ttl: Some("5m".into())
             }
         );
         assert_eq!(
@@ -343,9 +386,35 @@ mod tests {
             parse(&args("clone tpl t1")).unwrap().1,
             Command::Clone {
                 source: "tpl".into(),
-                target: "t1".into()
+                target: "t1".into(),
+                ttl: None
             }
         );
+        assert_eq!(
+            parse(&args("clone tpl t1 --ttl 1h")).unwrap().1,
+            Command::Clone {
+                source: "tpl".into(),
+                target: "t1".into(),
+                ttl: Some("1h".into())
+            }
+        );
+        assert_eq!(
+            parse(&args("ttl agent-1")).unwrap().1,
+            Command::Ttl {
+                name: "agent-1".into(),
+                value: None
+            }
+        );
+        assert_eq!(
+            parse(&args("ttl agent-1 30m")).unwrap().1,
+            Command::Ttl {
+                name: "agent-1".into(),
+                value: Some("30m".into())
+            }
+        );
+        assert_eq!(parse(&args("supervise")).unwrap().1, Command::Supervise);
+        assert_eq!(parse(&args("ttl")).unwrap_err().code, ExitCode::Usage);
+        assert_eq!(parse(&args("ttl a b c")).unwrap_err().code, ExitCode::Usage);
         assert_eq!(
             parse(&args("url myapp")).unwrap().1,
             Command::Url {

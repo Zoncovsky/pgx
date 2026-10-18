@@ -4,8 +4,6 @@
 //! file renamed into place). A record carries enough identity (the database
 //! OID and the cluster's system identifier) that stale metadata can never
 //! delete a same-named replacement or a database in another cluster.
-// Wired into the CLI and supervisor in the next commit.
-#![allow(dead_code)]
 use crate::errors::{PgxError, Result};
 use serde_json::json;
 use std::path::{Path, PathBuf};

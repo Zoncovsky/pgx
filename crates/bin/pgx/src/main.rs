@@ -55,6 +55,7 @@ fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
         } => cmd::init::run(&out, port, durability, force),
         Command::Serve => cmd::start::serve(&out),
         Command::Run => cmd::run::run(&out),
+        Command::Supervise => cmd::supervise::run(&out),
         Command::Doctor => cmd::doctor::run(&out),
         other => {
             let home = layout::Home::resolve();
@@ -70,17 +71,23 @@ fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
                 Command::Stop { force } => cmd::stop::run(&out, force),
                 Command::Restart => cmd::start::restart(&out),
                 Command::Status => cmd::status::run(&out),
-                Command::Create { name } => cmd::db::create(&out, &name),
+                Command::Create { name, ttl } => cmd::db::create(&out, &name, ttl.as_deref()),
                 Command::Drop { name, force } => cmd::db::drop(&out, &name, force),
-                Command::Clone { source, target } => cmd::db::clone(&out, &source, &target),
+                Command::Clone {
+                    source,
+                    target,
+                    ttl,
+                } => cmd::db::clone(&out, &source, &target, ttl.as_deref()),
                 Command::Ls => cmd::db::ls(&out),
+                Command::Ttl { name, value } => cmd::ttl::run(&out, &name, value.as_deref()),
                 Command::Url { name, socket } => cmd::db::url(&out, &name, socket),
                 Command::Help
                 | Command::Version
                 | Command::Init { .. }
                 | Command::Run
                 | Command::Doctor
-                | Command::Serve => unreachable!(),
+                | Command::Serve
+                | Command::Supervise => unreachable!(),
             }
         }
     }

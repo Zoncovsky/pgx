@@ -2,8 +2,6 @@
 //! seconds, timestamps are Unix epoch seconds (UTC), and `now` is always passed
 //! in so the logic is deterministic under test. Nothing here touches the clock,
 //! the filesystem or the engine.
-// Wired into the CLI (create/clone/ttl/ls) and the supervisor in the next commit.
-#![allow(dead_code)]
 use crate::errors::{PgxError, Result};
 
 /// A per-database time-to-live policy. The default everywhere is `Unlimited`.

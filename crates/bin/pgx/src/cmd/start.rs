@@ -1,7 +1,7 @@
 //! `pgx start` / `pgx restart`.
 use super::Ctx;
 use crate::cli::ExitCode;
-use crate::cmd::init::port_is_free;
+use crate::cmd::init::port_check;
 use crate::errors::{PgxError, Result};
 use crate::out::Out;
 use crate::{conf, fsdetect, process};
@@ -53,9 +53,21 @@ fn start_locked(out: &Out, ctx: &Ctx, restarted: bool) -> Result<ExitCode> {
         out.note("removing a stale postmaster.pid");
         std::fs::remove_file(&pid_file).map_err(|e| PgxError::io("cannot remove", &pid_file, &e))?;
     }
-    if !port_is_free(ctx.config.port) {
-        return Err(PgxError::new(ExitCode::Conflict, format!("port {} is in use", ctx.config.port))
-            .hint("stop the other process, or re-initialise on another port with `pgx init --force --port N`"));
+    // Retry the probe briefly: a genuine conflict persists, but a socket lingering
+    // from an engine we just stopped or killed clears within the kernel's cleanup
+    // window (the engine itself binds with SO_REUSEADDR and would not hit it).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match port_check(ctx.config.port) {
+            Ok(()) => break,
+            Err(why) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(PgxError::new(ExitCode::Conflict, format!("port {} is in use ({why})", ctx.config.port))
+                        .hint("stop the other process, or re-initialise on another port with `pgx init --force --port N`"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
     }
     // pgx.conf is regenerated from config.json on every start.
     let block_clone = fsdetect::supports_block_clone(&ctx.home.data);

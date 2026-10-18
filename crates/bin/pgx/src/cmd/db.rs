@@ -71,9 +71,15 @@ pub fn clone(out: &Out, source: &str, target: &str) -> Result<ExitCode> {
     if !exists(&ctx, &mut client, &source)? {
         return Err(PgxError::new(ExitCode::NotFound, format!("source database {source} does not exist")).hint("`pgx ls` lists databases"));
     }
-    let method = client.simple_query("SHOW file_copy_method").ok().and_then(|r| r.scalar().map(String::from)).unwrap_or_else(|| "unknown".into());
+    // STRATEGY = FILE_COPY makes CREATE DATABASE copy the files, so the engine's
+    // file_copy_method applies: clonefile on APFS, copy_file_range/FICLONE on
+    // Linux reflink filesystems and ZFS, i.e. copy-on-write where the filesystem
+    // supports it. The default WAL_LOG strategy copies every block through the
+    // buffer cache and never shares blocks, which would defeat disposable clones.
+    let file_copy_method = client.simple_query("SHOW file_copy_method").ok().and_then(|r| r.scalar().map(String::from)).unwrap_or_else(|| "unknown".into());
+    let method = if file_copy_method == "clone" { "clone" } else { "copy" };
     let t0 = Instant::now();
-    client.simple_query(&format!("CREATE DATABASE {} TEMPLATE {}", target.quoted(), source.quoted())).map_err(|e| {
+    client.simple_query(&format!("CREATE DATABASE {} TEMPLATE {} STRATEGY = FILE_COPY", target.quoted(), source.quoted())).map_err(|e| {
         let err = db_error(e, &format!("cannot clone {source} to {target}"));
         if err.code == ExitCode::InUse { err.hint(format!("clients are connected to {source}; disconnect them and retry")) } else { err }
     })?;
@@ -93,19 +99,21 @@ pub fn ls(out: &Out) -> Result<ExitCode> {
     let r = client
         .simple_query(
             "SELECT d.datname, pg_database_size(d.oid), d.datistemplate, \
-             (SELECT count(*) FROM pg_stat_activity a WHERE a.datname = d.datname AND a.backend_type = 'client backend') \
+             (SELECT count(*) FROM pg_stat_activity a WHERE a.datname = d.datname AND a.backend_type = 'client backend'), \
+             d.datconnlimit = -2 \
              FROM pg_database d WHERE NOT d.datistemplate ORDER BY d.datname",
         )
         .map_err(|e| db_error(e, "cannot list databases"))?;
     client.close();
     let mut items = Vec::new();
-    let mut text = format!("{:<32} {:>12} {:>11}\n", "DATABASE", "SIZE", "CONNECTIONS");
+    let mut text = format!("{:<32} {:>12} {:>11}  {}\n", "DATABASE", "SIZE", "CONNECTIONS", "STATE");
     for row in &r.rows {
         let name = row[0].clone().unwrap_or_default();
         let size: u64 = row[1].as_deref().and_then(|s| s.parse().ok()).unwrap_or(0);
         let conns: u64 = row[3].as_deref().and_then(|s| s.parse().ok()).unwrap_or(0);
-        text.push_str(&format!("{name:<32} {:>12} {conns:>11}\n", human_size(size)));
-        items.push(json!({"name": name, "size_bytes": size, "is_template": row[2].as_deref() == Some("t"), "connections": conns}));
+        let invalid = row[4].as_deref() == Some("t");
+        text.push_str(&format!("{name:<32} {:>12} {conns:>11}  {}\n", human_size(size), if invalid { "invalid (interrupted drop: run `pgx drop` again)" } else { "ok" }));
+        items.push(json!({"name": name, "size_bytes": size, "is_template": row[2].as_deref() == Some("t"), "connections": conns, "invalid": invalid}));
     }
     out.emit(text.trim_end(), json!(items));
     Ok(ExitCode::Ok)

@@ -102,3 +102,28 @@ fn doctor_warns_on_loose_config_permissions() {
     assert_eq!(s, "warn", "{d}");
     assert!(d.contains("644"), "{d}");
 }
+
+#[test]
+fn doctor_reports_old_orphan_dirs_but_not_fresh_ones() {
+    let p = Pgx::new();
+    p.init_ok();
+    p.start_ok();
+    let base = p.home.join("data/base");
+    std::fs::create_dir(base.join("777777")).unwrap();
+    std::fs::write(base.join("777777/1259"), vec![0u8; 8192]).unwrap();
+    // age the orphan: touch -t two days ago
+    let st = std::process::Command::new("touch").args(["-t", "202601010000", &base.join("777777").to_string_lossy()]).status().unwrap();
+    assert!(st.success());
+    std::fs::create_dir(base.join("888888")).unwrap(); // fresh: may be an in-flight CREATE DATABASE
+    let j = p.run(&["--json", "doctor"]).json();
+    let (s, d) = status_of(&j, "orphan_dirs");
+    assert_eq!(s, "warn", "{d}");
+    assert!(d.contains("777777") && !d.contains("888888"), "{d}");
+    assert!(base.join("777777").is_dir(), "doctor must never delete");
+    let hint = j["checks"].as_array().unwrap().iter().find(|c| c["name"] == "orphan_dirs").unwrap()["hint"].as_str().unwrap().to_string();
+    assert!(hint.contains("never deletes"), "{hint}");
+    std::fs::remove_dir_all(base.join("777777")).unwrap();
+    std::fs::remove_dir_all(base.join("888888")).unwrap();
+    let j = p.run(&["--json", "doctor"]).json();
+    assert_eq!(status_of(&j, "orphan_dirs").0, "ok");
+}

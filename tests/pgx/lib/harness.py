@@ -80,9 +80,25 @@ class Pgx:
         argv = [self.bin] + (["--json"] if json_out else []) + list(args)
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=dict(self.env, **(env or {})))
         r = CliResult(proc)
+        if r.code == 4 or (check and r.code != 0):
+            r.diagnostics = self.diagnostics()
         if check and r.code != 0:
-            raise AssertionError("pgx %s failed: %r\n--- log tail\n%s" % (" ".join(args), r, self.log_tail()))
+            raise AssertionError("pgx %s failed: %r\n--- diagnostics\n%s\n--- log tail\n%s" % (" ".join(args), r, r.diagnostics, self.log_tail()))
         return r
+
+    def diagnostics(self):
+        """Who holds the port, what the pid file says, which engines exist: for post-mortems."""
+        out = ["time %s" % time.strftime("%H:%M:%S")]
+        out.append("lsof -i:%d:\n%s" % (self.port, subprocess.run(["lsof", "-nP", "-i:%d" % self.port], capture_output=True, text=True).stdout))
+        out.append("netstat entries for port:\n%s" % subprocess.run("netstat -anv 2>/dev/null | grep '[.:]%d ' || true" % self.port, shell=True, capture_output=True, text=True).stdout.strip())
+        try:
+            with open(os.path.join(self.data, "postmaster.pid")) as f:
+                out.append("postmaster.pid: %r" % f.read())
+        except OSError as e:
+            out.append("postmaster.pid: %s" % e)
+        out.append("engine pids: %s" % self.engine_pids())
+        out.append("ps (postgres): %s" % subprocess.run("ps -axo pid,ppid,stat,lstart,command | grep '[p]ostgres -D' || true", shell=True, capture_output=True, text=True).stdout.strip())
+        return "\n".join(out)
 
     def init(self, *extra):
         args = ["init", "--port", str(self.port)] + list(extra)

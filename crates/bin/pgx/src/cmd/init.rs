@@ -14,21 +14,27 @@ use std::time::Duration;
 /// sun_path is 104 bytes on macOS (103 + NUL), 108 on Linux; use the stricter one.
 pub const MAX_SOCKET_PATH: usize = 103;
 
+/// Ok when both loopback addresses can be bound; Err names the address and the OS error.
+pub fn port_check(port: u16) -> std::result::Result<(), String> {
+    let v4 = TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("bind 127.0.0.1:{port}: {e}"))?;
+    let v6 = match TcpListener::bind(("::1", port)) {
+        Ok(l) => Some(l),
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::AddrNotAvailable) || e.raw_os_error() == Some(libc::EAFNOSUPPORT) => None,
+        Err(e) => return Err(format!("bind [::1]:{port}: {e}")),
+    };
+    drop(v4);
+    drop(v6);
+    Ok(())
+}
+
 pub fn port_is_free(port: u16) -> bool {
-    match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(_) => {}
-        Err(_) => return false,
-    }
-    match TcpListener::bind(("::1", port)) {
-        Ok(_) => true,
-        Err(e) => matches!(e.kind(), std::io::ErrorKind::AddrNotAvailable) || e.raw_os_error() == Some(libc::EAFNOSUPPORT),
-    }
+    port_check(port).is_ok()
 }
 
 pub fn choose_port(requested: Option<u16>) -> Result<u16> {
     if let Some(p) = requested {
-        if !port_is_free(p) {
-            return Err(PgxError::new(ExitCode::Conflict, format!("port {p} is in use")).hint("choose another with `pgx init --port N`, or stop the process using it"));
+        if let Err(why) = port_check(p) {
+            return Err(PgxError::new(ExitCode::Conflict, format!("port {p} is in use ({why})")).hint("choose another with `pgx init --port N`, or stop the process using it"));
         }
         return Ok(p);
     }

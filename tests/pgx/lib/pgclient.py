@@ -85,7 +85,12 @@ class Conn:
         return head[:1], self._recv_exact(length - 4)
 
     def _send(self, kind, payload=b""):
-        self.sock.sendall(kind + struct.pack("!i", 4 + len(payload)) + payload)
+        try:
+            self.sock.sendall(kind + struct.pack("!i", 4 + len(payload)) + payload)
+        except OSError as e:
+            # The server closed the connection (e.g. it terminated this backend
+            # after a FATAL). Surface it as ConnectionClosed, not a raw OSError.
+            raise ConnectionClosed("send failed: %s" % e)
 
     # ------------------------------------------------------------ startup / auth
     def _startup(self):
@@ -262,9 +267,12 @@ class Conn:
     def close(self):
         try:
             self._send(b"X")
+        except (OSError, ConnectionClosed):
+            pass
+        try:
+            self.sock.close()
         except OSError:
             pass
-        self.sock.close()
 
     def __enter__(self):
         return self

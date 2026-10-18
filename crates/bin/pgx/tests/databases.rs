@@ -156,3 +156,18 @@ fn db_commands_need_running_runtime() {
     assert_eq!(p.run(&["ls"]).code, 3);
     assert_eq!(p.run(&["url", "x"]).code, 3);
 }
+
+#[test]
+fn ls_flags_invalid_databases() {
+    let p = up();
+    assert_eq!(p.run(&["create", "inv"]).code, 0);
+    // What an interrupted DROP DATABASE leaves behind (PostgreSQL 15+ marks the row invalid first).
+    assert_eq!(p.psql("postgres", "UPDATE pg_database SET datconnlimit = -2 WHERE datname = 'inv'").code, 0);
+    let j = p.run(&["--json", "ls"]).json();
+    let inv = j.as_array().unwrap().iter().find(|d| d["name"] == "inv").unwrap();
+    assert_eq!(inv["invalid"], true);
+    let r = p.run(&["ls"]);
+    assert!(r.stdout.contains("invalid"), "{}", r.stdout);
+    let r = p.run(&["drop", "inv", "--force"]);
+    assert_eq!(r.code, 0, "{}", r.all());
+}

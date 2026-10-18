@@ -43,6 +43,54 @@ fn mb(b: u64) -> String {
     if b >= 1 << 30 { format!("{:.1} GB", b as f64 / (1u64 << 30) as f64) } else { format!("{} MB", b >> 20) }
 }
 
+/// Directories under base/ that no pg_database row references. Read-only, and
+/// conservative: the runtime must be up (so the catalog is current), pgsql_tmp
+/// and non-numeric names are ignored, and anything modified in the last
+/// 2 minutes is treated as a CREATE DATABASE that may still be in progress.
+pub fn orphan_dirs(data: &Path, known_oids: &[String]) -> Vec<(String, u64)> {
+    let base = data.join("base");
+    let Ok(entries) = std::fs::read_dir(&base) else { return Vec::new() };
+    let now = std::time::SystemTime::now();
+    let mut out = Vec::new();
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !name.chars().all(|c| c.is_ascii_digit()) || known_oids.iter().any(|k| *k == name) {
+            continue;
+        }
+        let Ok(meta) = e.metadata() else { continue };
+        if !meta.is_dir() {
+            continue;
+        }
+        if let Ok(m) = meta.modified() {
+            if now.duration_since(m).map(|d| d.as_secs() < 120).unwrap_or(true) {
+                continue;
+            }
+        }
+        let size = dir_size(&e.path());
+        out.push((name, size));
+    }
+    out.sort();
+    out
+}
+
+fn dir_size(p: &Path) -> u64 {
+    std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| e.metadata().map(|m| if m.is_dir() { dir_size(&e.path()) } else { m.len() }).unwrap_or(0)).sum()).unwrap_or(0)
+}
+
+fn orphan_check(data: &Path, known: &[String]) -> Check {
+    let orphans = orphan_dirs(data, known);
+    if orphans.is_empty() {
+        return ok("orphan_dirs", "every base/<oid> directory belongs to a database");
+    }
+    let total: u64 = orphans.iter().map(|(_, s)| *s).sum();
+    let names: Vec<String> = orphans.iter().map(|(n, s)| format!("{n} ({})", mb(*s))).collect();
+    warn(
+        "orphan_dirs",
+        format!("{} base/<oid> directory(ies) not referenced by pg_database, {} in total: {}", orphans.len(), mb(total), names.join(", ")),
+        format!("left by a CREATE DATABASE or clone interrupted by a crash; pgx never deletes them. After confirming nothing is creating a database, remove them by hand from {}/base", data.display()),
+    )
+}
+
 pub fn run(out: &Out) -> Result<ExitCode> {
     let mut checks: Vec<Check> = Vec::new();
     let home = Home::resolve();
@@ -156,13 +204,21 @@ pub fn run(out: &Out) -> Result<ExitCode> {
         checks.push(warn("filesystem", format!("{fs_name} without block cloning: `pgx clone` copies files"), "APFS, ZFS, btrfs or XFS with reflinks make clones copy-on-write"));
     }
 
-    // Libraries and log, when running.
+    // Libraries, orphan directories and log, when running.
     if let (Some(pid), Some(cfg)) = (running_pid, config.as_ref()) {
         let _ = pid;
         match crate::pgwire::Client::connect_unix(&sock_dir, cfg.port, "postgres", "postgres", std::time::Duration::from_secs(10)) {
             Ok(mut client) => {
                 let status: serde_json::Value = client.simple_query("SELECT pgrust_runtime_status()").ok().and_then(|r| r.scalar().map(String::from)).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+                let known: Option<Vec<String>> = client.simple_query("SELECT oid::text FROM pg_database").ok().map(|r| r.rows.iter().filter_map(|row| row[0].clone()).collect());
+                let invalid: Vec<String> = client.simple_query("SELECT datname FROM pg_database WHERE datconnlimit = -2").map(|r| r.rows.iter().filter_map(|row| row[0].clone()).collect()).unwrap_or_default();
                 client.close();
+                if let Some(known) = known {
+                    checks.push(orphan_check(&home.data, &known));
+                }
+                if !invalid.is_empty() {
+                    checks.push(warn("invalid_databases", format!("{} database(s) marked invalid by an interrupted DROP DATABASE: {}", invalid.len(), invalid.join(", ")), "drop them again: `pgx drop <name> --force`"));
+                }
                 for (lib, feature, pkg) in [("libxml2", "the xml type and SQL/XML functions", "libxml2"), ("icu", "ICU collations", "libicu")] {
                     let l = &status["libraries"][lib];
                     let name: &'static str = if lib == "libxml2" { "libxml2" } else { "icu" };

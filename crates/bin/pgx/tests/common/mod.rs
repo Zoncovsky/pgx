@@ -12,6 +12,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
+static PORT_SEQ: AtomicU32 = AtomicU32::new(0);
 
 pub struct Pgx {
     pub prefix: PathBuf,
@@ -36,8 +37,23 @@ pub fn dist_prefix() -> PathBuf {
 }
 
 pub fn free_port() -> u16 {
-    let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    l.local_addr().unwrap().port()
+    // Hand out a DISTINCT candidate per call (process-wide sequence) rather than
+    // asking the kernel for an ephemeral port with bind(:0): under parallel
+    // tests two bind(:0) calls can be handed the same recently-closed ephemeral
+    // port, and then two `pgx init`s race to bind it (one gets exit 4). A unique
+    // sequence, offset by pid so separate test binaries don't overlap, removes
+    // that race; each candidate is still bind-verified to skip a port already
+    // held by an unrelated process.
+    let offset = (std::process::id().wrapping_mul(131)) % 20000;
+    for _ in 0..40000u32 {
+        let seq = PORT_SEQ.fetch_add(1, Ordering::SeqCst);
+        let port = 20000 + ((offset + seq) % 40000);
+        let port = port as u16;
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    panic!("no free port found in [20000, 60000)");
 }
 
 pub fn scratch_root() -> PathBuf {

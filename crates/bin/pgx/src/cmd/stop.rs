@@ -8,6 +8,10 @@ use std::time::Duration;
 
 pub fn run(out: &Out, force: bool) -> Result<ExitCode> {
     let ctx = Ctx::load()?;
+    // Stop the TTL supervisor first: it is tied to the runtime's lifetime, and
+    // ending it here (rather than letting it notice on its next poll) frees the
+    // single-instance lock so a restart or relocation can spawn a fresh one.
+    super::start::stop_supervisor(&ctx.home);
     let pid_file = ctx.home.data.join("postmaster.pid");
     let Some(pid) = ctx.running_pid() else {
         if pid_file.exists() {

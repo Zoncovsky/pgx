@@ -218,6 +218,33 @@ pub fn spawn_supervisor(home: &crate::layout::Home) {
     let _ = cmd.spawn();
 }
 
+/// Stop the background TTL supervisor for this home, if one is running. The
+/// supervisor is tied to the runtime's lifetime, so `pgx stop` ends it
+/// deterministically rather than leaving it to notice the engine is gone on its
+/// next poll. Doing it promptly also frees the single-instance lock, so a
+/// relocated or quickly-restarted runtime can spawn a fresh supervisor without
+/// racing a lingering one for the lock. Sends SIGTERM, waits briefly for exit,
+/// and removes the pid file.
+pub fn stop_supervisor(home: &crate::layout::Home) {
+    let pid_path = home.root.join("supervisor.pid");
+    let Ok(text) = std::fs::read_to_string(&pid_path) else {
+        return;
+    };
+    if let Ok(pid) = text.trim().parse::<i32>() {
+        if pid > 1 && unsafe { libc::kill(pid, 0) } == 0 {
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+            // Wait up to ~3s for it to exit so the lock is released before we return.
+            for _ in 0..30 {
+                if unsafe { libc::kill(pid, 0) } != 0 {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&pid_path);
+}
+
 /// the Docker entrypoint expects.
 pub fn serve(out: &Out) -> Result<ExitCode> {
     use crate::layout::Home;

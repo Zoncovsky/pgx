@@ -234,3 +234,40 @@ fn hex(name: &str) -> String {
     s.push_str(".json");
     s
 }
+
+#[test]
+fn stop_stops_the_supervisor_and_restart_respawns_it() {
+    // The supervisor is tied to the runtime's lifetime: `pgx stop` must stop it
+    // promptly (not only when it next notices the engine is down), so a stale
+    // supervisor can never hold the single-instance lock across a restart (which
+    // left no supervisor running after a PGX_HOME relocation). A later start must
+    // bring a fresh supervisor back and cleanup must resume.
+    let p = Pgx::new();
+    up(&p);
+    assert!(
+        p.wait_supervisor(10),
+        "supervisor should be running after `pgx run`"
+    );
+    p.stop_ok();
+    assert!(
+        !p.supervisor_running(),
+        "`pgx stop` must stop the TTL supervisor, not leave it polling:\n{}",
+        p.log_tail()
+    );
+    // Stop frees the port; wait for the kernel to release it before rebinding
+    // (deterministic under parallel load — not a weaker assertion).
+    assert!(p.wait_port_free(10), "stop should free the runtime port");
+    p.start_ok();
+    assert!(
+        p.wait_supervisor(10),
+        "`pgx start` must respawn the supervisor:\n{}",
+        p.log_tail()
+    );
+    // Cleanup actually works again after the restart.
+    assert_eq!(p.run(&["create", "afterrestart", "--ttl", "3s"]).code, 0);
+    assert!(
+        wait_gone(&p, "afterrestart", 20),
+        "cleanup must resume after restart:\n{}",
+        p.log_tail()
+    );
+}

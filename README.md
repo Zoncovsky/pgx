@@ -302,7 +302,28 @@ branch management. PGX is the runtime. They are separate projects.
 
 ## Quickstart
 
-### Build
+Install PGX and create your first database. No system PostgreSQL required; the
+distribution is self-contained and relocatable.
+
+```bash
+curl -fsSL https://pgx.dev/install | sh
+
+pgx init          # create a cluster under ~/.pgx
+pgx start         # start the runtime
+pgx create myapp  # a database
+pgx url myapp     # its connection URL — point DATABASE_URL at this
+pgx status        # running?, port, databases, memory
+pgx clone myapp test_1   # copy-on-write clone
+pgx stop
+```
+
+Any PostgreSQL client or ORM works against `pgx url <db>`. The full CLI,
+install options, integrations (Rails, Node, Python, Go, psql), storage model
+and troubleshooting are under [`docs/pgx/local-dev/`](docs/pgx/local-dev/); the
+test matrix and release decision are in
+[`docs/pgx/local-dev/validation-report.md`](docs/pgx/local-dev/validation-report.md).
+
+### Build from source
 
 You need the Rust toolchain (`rust-toolchain.toml` pins Rust 1.96.0;
 rustup fetches it), the RE2 regex library, and the PostgreSQL 18 client
@@ -321,6 +342,15 @@ cargo build --release --locked --bin postgres
 
 The server binary is `target/release/postgres`. Release builds refuse to
 compile without RE2 on purpose: the fallback regex engine is much slower.
+
+At run time the server loads two libraries with `dlopen` rather than
+linking them: libxml2 for the `xml` type and SQL/XML functions, and ICU for
+ICU collations. The PostgreSQL 18 packages above install both. A host
+without libxml2 still starts, but XML functions raise `unsupported XML
+feature` (SQLSTATE 0A000) with a hint naming the library, and
+`pgrust_runtime_status()` reports `libraries.libxml2.available = false`.
+Debian/Ubuntu package: `libxml2` (`libxml2-16` from Ubuntu 25.10); macOS
+ships libxml2 with the system.
 
 ### Run a PGX runtime
 

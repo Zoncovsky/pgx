@@ -227,8 +227,10 @@ pub fn fc_pgrust_runtime_status(
             "\"databases\":{{\"total\":{dbt},\"ephemeral\":{eph},\"spares\":{spr},\"pinned\":{pin}}},",
             "\"janitor\":{{\"prefix\":\"{pfx}\",\"pool_size\":{pool},\"pending_mints\":{pend},",
             "\"connection_limit\":{cl},\"pool_handouts\":{ph},\"cold_mints\":{cm},\"spares_minted\":{sm},",
-            "\"mint_failures\":{mf},\"cold_mint_ms_mean\":{cmean},\"cold_mint_ms_max\":{cmax}}}}}"
+            "\"mint_failures\":{mf},\"cold_mint_ms_mean\":{cmean},\"cold_mint_ms_max\":{cmax}}},",
+            "\"libraries\":{libs}}}"
         ),
+        libs = libraries_json(),
         pid = std::process::id(),
         rss = vm_rss_kb.map_or("null".into(), |k| (k * 1024).to_string()),
         pss = pss_kb.map_or("null".into(), |k| (k * 1024).to_string()),
@@ -260,6 +262,49 @@ pub fn fc_pgrust_runtime_status(
         cmax = format!("{:.1}", crate::counters::get(&crate::counters::COLD_MINT_US_MAX) as f64 / 1000.0),
     );
     Ok(types_fmgr::varlena_result(varlena::cstring_to_text(fcinfo.result_mcx(), json.as_bytes())?))
+}
+
+/// Shared libraries the runtime binds with dlopen instead of linking: a host
+/// without one serves a subset of PostgreSQL (SQL/XML without libxml2, ICU
+/// collations without libicu), which the compatibility gate cannot see from
+/// the source database. Reported here so placement can refuse such a host
+/// (docs/pgx/compatibility-gate.md "host_library_missing"). Each probe
+/// resolves once per process and is cached.
+fn libraries_json() -> String {
+    let xml = match adt_xml::libxml::status() {
+        Ok(l) => format!(
+            "{{\"available\":true,\"library\":{},\"version\":{},\"error\":null}}",
+            json_str(l.library),
+            l.version.map_or("null".to_string(), json_str),
+        ),
+        Err(e) => format!(
+            "{{\"available\":false,\"library\":null,\"version\":null,\"error\":{}}}",
+            json_str(e)
+        ),
+    };
+    let icu = match pg_locale::icu_unicode_version_str() {
+        Some(v) => format!("{{\"available\":true,\"unicode_version\":{}}}", json_str(v)),
+        None => "{\"available\":false,\"unicode_version\":null}".to_string(),
+    };
+    format!("{{\"libxml2\":{xml},\"icu\":{icu}}}")
+}
+
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn proc_status() -> (Option<u64>, Option<u64>) {

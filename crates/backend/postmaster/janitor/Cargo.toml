@@ -16,6 +16,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(pgrust_sim)"]
 [dependencies]
 aclchk = { path = "../../catalog/aclchk" }
 adt_acl = { path = "../../utils/adt/acl" }
+adt_xml = { path = "../../utils/adt/xml" }
 bgworker = { path = "../bgworker" }
 cache_syscache = { path = "../../utils/cache/cache_syscache" }
 catalog_indexing = { path = "../../catalog/catalog_indexing" }
@@ -43,6 +44,7 @@ pg_clock = { path = "../../../port/pg_clock" }
 mcx = { path = "../../../_support/mcx" }
 miscinit = { path = "../../utils/init/miscinit" }
 pg_database = { path = "../../catalog/pg_database" }
+pg_locale = { path = "../../utils/adt/pg_locale" }
 pg_db_role_setting = { path = "../../catalog/pg_db_role_setting" }
 pgsync = { path = "../../../_support/pgsync" }
 postgres_seams = { path = "../../tcop/postgres_seams" }

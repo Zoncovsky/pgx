@@ -310,6 +310,7 @@ members = [
     "crates/bin/pg_combinebackup",
     "crates/bin/pg_walsummary",
     "crates/bin/psql",
+    "crates/bin/pgx",
     "crates/backend/access/transam/xlogutils",
     "crates/backend/access/table/tableam_vocab",
     "crates/backend/access/table/tableam",

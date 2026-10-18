@@ -48,3 +48,10 @@ wire-diff-out/
 .tpchconv/
 .tpch22/
 __pycache__/
+
+# local tooling scratch
+.worktrees/
+.superpowers/
+
+# black-box suite logs and scratch clusters (key artifacts are copied to docs/pgx/local-dev/validation/)
+tests/results/

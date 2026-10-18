@@ -1,0 +1,9 @@
+# build artifacts produced by the fixtures' run.sh
+node/node_modules/
+node/package-lock.json
+node/npm-install.log
+python/.venv/
+python/pip-install.log
+go/go.sum
+go/go-get.log
+go/go-run.log

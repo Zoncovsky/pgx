@@ -8492,6 +8492,7 @@ version = "0.0.0"
 dependencies = [
  "aclchk",
  "adt_acl",
+ "adt_xml",
  "bgworker",
  "cache_syscache",
  "catalog_indexing",
@@ -8520,6 +8521,7 @@ dependencies = [
  "pg_clock",
  "pg_database",
  "pg_db_role_setting",
+ "pg_locale",
  "pg_proc",
  "pgsync",
  "postgres_seams",
@@ -13988,6 +13990,14 @@ dependencies = [
  "types_storage",
  "types_tuple",
  "xloginsert",
+]
+
+[[package]]
+name = "pgx"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde_json",
 ]
 
 [[package]]

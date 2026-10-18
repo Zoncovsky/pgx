@@ -30,13 +30,19 @@ RUN useradd -m builder && mkdir -p /out && chown builder:builder /out \
 
 # ---------- runtime ----------
 FROM ubuntu:24.04
+# The PGX engine (like PostgreSQL) refuses to run as root, so the image runs as
+# an unprivileged `pgx` user. Create it, own the data/run dirs, and COPY the
+# distribution owned by pgx so the bundled base cluster (mode 700) is readable.
 RUN apt-get update && apt-get install -y --no-install-recommends libxml2 libicu74 ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /pgx /opt/pgx
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -r -u 10001 pgx \
+ && mkdir -p /var/lib/pgx /var/run/pgx && chown pgx:pgx /var/lib/pgx /var/run/pgx
+COPY --from=builder --chown=pgx:pgx /pgx /opt/pgx
 COPY dist/docker/entrypoint.sh /usr/local/bin/pgx-entrypoint
 RUN ln -s /opt/pgx/bin/pgx /usr/local/bin/pgx && chmod +x /usr/local/bin/pgx-entrypoint
 # PGX_HOME lives on the volume so data and the generated config persist.
 ENV PGX_HOME=/var/lib/pgx PGX_RUN_DIR=/var/run/pgx PGX_LISTEN=0.0.0.0 PGX_PORT=5432
+USER pgx
 VOLUME /var/lib/pgx
 EXPOSE 5432
 ENTRYPOINT ["pgx-entrypoint"]

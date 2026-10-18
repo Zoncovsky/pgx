@@ -2,7 +2,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, pgx-local-dev]
+    branches: [main, prod]
 # PR gate: fast correctness checks for the pgx CLI, the assembled distribution,
 # the black-box SQL/clone/doctor suites, the installer, and the Docker image.
 concurrency:

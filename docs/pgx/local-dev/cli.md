@@ -4,6 +4,26 @@
 object (or array) on stdout; errors print `{"error":{...}}`. Data lives under
 `$PGX_HOME` (default `~/.pgx`).
 
+## Quick start
+
+| Command | What it does |
+|---|---|
+| `pgx run` | One command to a ready database. Initialise `$PGX_HOME` if needed, start the runtime if it is not already up, ensure a default `app` database, and print its connection URL. Idempotent and safe to repeat; it never resets or overwrites an existing database. `--json` prints one object (for agents). The first run reads `PGX_PORT` / `PGX_DURABILITY` / `PGX_PASSWORD`; afterwards they come from the saved config. |
+
+```console
+$ pgx run
+PGX is ready.
+
+  postgres://postgres:…@127.0.0.1:5432/app
+
+  database   app (created)
+  runtime    started (pid 23469, port 5432)
+  home       /home/you/.pgx
+
+Connect:
+  psql "postgres://postgres:…@127.0.0.1:5432/app"
+```
+
 ## Runtime
 
 | Command | What it does |

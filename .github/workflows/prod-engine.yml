@@ -1,0 +1,33 @@
+name: prod engine
+on:
+  pull_request:
+    branches: [prod]
+  push:
+    branches: [prod]
+# prod carries only the engine that PGRun deploys. This required check proves
+# that exact engine still compiles reproducibly from the committed Cargo.lock,
+# using the same PostgreSQL 18 / RE2 toolchain as the public main CI. It builds
+# the engine binary and nothing else: the pgx CLI, dist/ and the local-dev test
+# suites are not on prod.
+concurrency:
+  group: prod-engine-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  engine:
+    name: engine build (postgres)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL 18 and RE2
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo wget -qO /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-18 postgresql-client-18 libre2-dev pkg-config build-essential clang
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the engine (reproducible, locked)
+        run: cargo build --release --locked --bin postgres

@@ -17,7 +17,8 @@ cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; docker volume rm "$VOL
 trap cleanup EXIT INT TERM
 
 echo "building image ..."
-docker build -q -t "$TAG" "$ROOT" >/dev/null || fail "docker build"
+# Not -q: surface the build output (e.g. assemble.sh's own error) on failure.
+docker build -t "$TAG" "$ROOT" || fail "docker build"
 echo "starting container ..."
 docker run -d --name "$NAME" -e PGX_PASSWORD=dockerpass -p "$PORT:5432" -v "$VOL:/var/lib/pgx" "$TAG" >/dev/null || fail "docker run"
 URL="postgres://postgres:dockerpass@127.0.0.1:$PORT/postgres"

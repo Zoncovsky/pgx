@@ -86,20 +86,51 @@ pub fn render_pgx_conf(cfg: &Config, sock_dir: &Path, block_clone: bool) -> Stri
 /// `pg_hba.conf`: trust on the Unix socket, scram-sha-256 on loopback TCP, plus
 /// a scram-sha-256 line for each non-loopback listen address (so a container
 /// exposed with `-p` is reachable, still password-protected).
+/// True when `addr` is a listen address pgx may write into pgx.conf and pg_hba:
+/// a bare IPv4/IPv6, an IPv4/IPv6 CIDR, or one of the special tokens. Rejects
+/// anything with whitespace, quotes, `#` or other characters, closing the
+/// pg_hba/listen_addresses injection and the malformed-CIDR breakage.
+pub fn valid_listen_addr(addr: &str) -> bool {
+    matches!(addr, "localhost" | "*" | "0.0.0.0" | "::") || {
+        let (host, cidr) = match addr.split_once('/') {
+            Some((h, n)) => (h, Some(n)),
+            None => (addr, None),
+        };
+        let host_ok = host.parse::<std::net::IpAddr>().is_ok();
+        let cidr_ok = match cidr {
+            None => true,
+            Some(n) => {
+                let max = if host.contains(':') { 128 } else { 32 };
+                matches!(n.parse::<u8>(), Ok(v) if v <= max)
+            }
+        };
+        host_ok && cidr_ok
+    }
+}
+
+/// The pg_hba ADDRESS token for a listen address, or None for a loopback/invalid
+/// one (loopback is already covered by the fixed lines).
+fn hba_address(addr: &str) -> Option<String> {
+    match addr {
+        "127.0.0.1" | "::1" | "localhost" => None,
+        "0.0.0.0" | "*" => Some("0.0.0.0/0".into()),
+        "::" => Some("::/0".into()),
+        a if !valid_listen_addr(a) => None, // never emit an unvalidated token
+        a if a.contains('/') => Some(a.to_string()), // already a CIDR
+        a if a.contains(':') => Some(format!("{a}/128")), // bare IPv6
+        a => Some(format!("{a}/32")),       // bare IPv4
+    }
+}
+
 pub fn render_hba(listen: &[String]) -> String {
     let mut out = String::from(
         "# pg_hba.conf — written by pgx init.\n         # TYPE  DATABASE  USER  ADDRESS       METHOD\n         local   all       all                 trust\n         host    all       all   127.0.0.1/32  scram-sha-256\n         host    all       all   ::1/128       scram-sha-256\n",
     );
     for a in listen {
-        match a.as_str() {
-            "127.0.0.1" | "::1" | "localhost" => {}
-            "0.0.0.0" | "*" => {
-                out.push_str("host    all       all   0.0.0.0/0     scram-sha-256\n")
-            }
-            "::" => out.push_str("host    all       all   ::/0          scram-sha-256\n"),
-            other => out.push_str(&format!(
-                "host    all       all   {other}/32  scram-sha-256\n"
-            )),
+        if let Some(addr) = hba_address(a) {
+            out.push_str(&format!(
+                "host    all       all   {addr:<13} scram-sha-256\n"
+            ));
         }
     }
     out
@@ -149,6 +180,54 @@ mod tests {
         assert!(h.contains("127.0.0.1/32  scram-sha-256"));
         assert!(h.contains("::1/128       scram-sha-256"));
         assert!(!h.contains("0.0.0.0"));
+    }
+
+    #[test]
+    fn listen_validation_rejects_injection_and_junk() {
+        for bad in [
+            "127.0.0.1/32 scram\nhost all all 0.0.0.0/0 trust #",
+            "1.2.3.4'",
+            "1.2.3.4 #x",
+            "not an ip",
+            "",
+            "1.2.3.4/33/32",
+        ] {
+            assert!(!valid_listen_addr(bad), "should reject {bad:?}");
+        }
+        for ok in [
+            "127.0.0.1",
+            "::1",
+            "0.0.0.0",
+            "::",
+            "localhost",
+            "*",
+            "10.0.0.0/24",
+            "192.168.1.5",
+            "fe80::1",
+            "2001:db8::/32",
+        ] {
+            assert!(valid_listen_addr(ok), "should accept {ok:?}");
+        }
+    }
+
+    #[test]
+    fn hba_cidr_is_not_suffixed_with_32() {
+        let h = render_hba(&["10.0.0.0/24".into()]);
+        let line = h
+            .lines()
+            .find(|l| l.contains("10.0.0.0/24"))
+            .expect("cidr line");
+        assert!(
+            line.contains("10.0.0.0/24") && line.trim_end().ends_with("scram-sha-256"),
+            "{line:?}"
+        );
+        assert!(
+            !h.contains("10.0.0.0/24/32"),
+            "a CIDR must not get a /32 suffix: {h}"
+        );
+        let h = render_hba(&["192.168.1.5".into()]);
+        assert!(h.contains("192.168.1.5/32"), "a bare IPv4 gets /32: {h}");
+        assert!(!h.contains("192.168.1.5/32/32"), "{h}");
     }
 
     #[test]

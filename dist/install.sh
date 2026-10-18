@@ -75,8 +75,14 @@ tar -xzf "$tmp/$name.tar.gz" -C "$tmp" || err "extract failed"
 mkdir -p "$(dirname "$install_dir")"
 rm -rf "$install_dir.partial"
 cp -R "$tmp/$name" "$install_dir.partial"
-rm -rf "$install_dir"
+# Move any existing install aside first, then rename the new one into place, so
+# an interruption can never leave no install at all. Remove the old copy last.
+if [ -e "$install_dir" ]; then
+  rm -rf "$install_dir.old"
+  mv "$install_dir" "$install_dir.old"
+fi
 mv "$install_dir.partial" "$install_dir"
+rm -rf "$install_dir.old" 2>/dev/null || true
 
 mkdir -p "$BIN_DIR"
 ln -sf "$install_dir/bin/pgx" "$BIN_DIR/pgx"

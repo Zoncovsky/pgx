@@ -496,3 +496,49 @@ fn init_honors_pgx_password_env() {
     assert_eq!(r.code, 2, "{}", r.all());
     assert!(r.stderr.contains("too short"), "{}", r.stderr);
 }
+
+#[test]
+fn init_force_refuses_while_recorded_pid_is_alive() {
+    // A postmaster.pid naming a live process (here, this test process) must stop
+    // `pgx init --force` from deleting the data directory, even though that
+    // process is not our engine. Guards against a mis-identified live cluster.
+    let p = Pgx::new();
+    p.init_ok();
+    std::fs::write(p.home.join("data/marker"), b"keep").unwrap();
+    let me = std::process::id();
+    std::fs::write(
+        p.home.join("data/postmaster.pid"),
+        format!(
+            "{me}\n{}\n1\n{}\n{}\n\n  0 0\nready\n",
+            p.home.join("data").display(),
+            p.port,
+            p.sock_dir().display()
+        ),
+    )
+    .unwrap();
+    let port = p.port.to_string();
+    let r = p.run(&["init", "--port", &port, "--force"]);
+    assert_eq!(r.code, 4, "{}", r.all());
+    assert!(r.stderr.contains("alive"), "{}", r.stderr);
+    assert!(
+        p.home.join("data/marker").is_file(),
+        "--force deleted the data dir while a pid was alive"
+    );
+    // With a dead pid in the file, --force proceeds.
+    std::fs::write(
+        p.home.join("data/postmaster.pid"),
+        format!(
+            "999999\n{}\n1\n{}\n{}\n\n  0 0\nready\n",
+            p.home.join("data").display(),
+            p.port,
+            p.sock_dir().display()
+        ),
+    )
+    .unwrap();
+    let r = p.run(&["init", "--port", &port, "--force"]);
+    assert_eq!(r.code, 0, "{}", r.all());
+    assert!(
+        !p.home.join("data/marker").exists(),
+        "--force should have recreated the data dir"
+    );
+}

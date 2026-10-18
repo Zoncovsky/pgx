@@ -84,6 +84,16 @@ pub fn run(
                 )
                 .hint("`pgx stop` first"));
             }
+            // Even if we cannot prove it is our engine, refuse to delete the data
+            // directory while the recorded PID is alive: it may be a running
+            // postmaster we failed to recognise.
+            if process::pid_alive(pf.pid) {
+                return Err(PgxError::new(
+                    ExitCode::Conflict,
+                    format!("a process (pid {}) recorded in postmaster.pid is still alive", pf.pid),
+                )
+                .hint("stop it first; `pgx init --force` will not delete the data directory while that PID is alive"));
+            }
         }
         out.note(&format!("removing {}", home.data.display()));
         if home.data.exists() {

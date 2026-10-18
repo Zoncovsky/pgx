@@ -36,10 +36,26 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+/// Percent-encode a URL userinfo component (the password): the unreserved set
+/// only, so `/ ? # @ : [ ]` and the rest are escaped and cannot alter the
+/// authority of a `postgres://` URL.
+fn percent_encode_userinfo(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 pub fn tcp_url(ctx: &Ctx, name: &str) -> String {
     format!(
         "postgres://postgres:{}@127.0.0.1:{}/{}",
-        percent_encode(&ctx.config.password),
+        percent_encode_userinfo(&ctx.config.password),
         ctx.config.port,
         percent_encode(name)
     )
@@ -238,6 +254,15 @@ mod tests {
         assert_eq!(percent_encode("/tmp/pgx run"), "/tmp/pgx%20run");
         assert_eq!(percent_encode("p@ss:w/rd"), "p%40ss%3Aw/rd");
         assert_eq!(percent_encode("Abc-_.~09"), "Abc-_.~09");
+    }
+
+    #[test]
+    fn userinfo_encoding_escapes_slash_and_url_specials() {
+        // A password with / ? # @ : must not break the authority of a postgres:// URL.
+        assert_eq!(percent_encode_userinfo("pa/ss"), "pa%2Fss");
+        assert_eq!(percent_encode_userinfo("a?b#c@d:e"), "a%3Fb%23c%40d%3Ae");
+        assert_eq!(percent_encode_userinfo("Abc-_.~09"), "Abc-_.~09");
+        assert!(!percent_encode_userinfo("x/y?z").contains('/'));
     }
 
     #[test]

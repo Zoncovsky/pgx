@@ -92,16 +92,24 @@ pub fn command_line(pid: u32) -> Option<String> {
     }
 }
 
+/// True when `cmd` is an engine process launched on exactly `data_dir`, i.e. it
+/// carries the `-D <data_dir>` launch flag. Matching the flag (not just the path
+/// as a substring) avoids treating an unrelated process whose argv merely
+/// mentions the data directory (a backup, an editor) as our engine.
+pub fn engine_cmdline_matches(cmd: &str, data_dir: &Path) -> bool {
+    let needle = format!("-D {}", data_dir.display());
+    cmd.split(&needle)
+        .skip(1)
+        .any(|rest| rest.is_empty() || rest.starts_with([' ', '\0']))
+}
+
 /// True when `pid` is alive and is an engine started on this data directory.
 pub fn is_our_engine(pid: u32, data_dir: &Path) -> bool {
     if !pid_alive(pid) {
         return false;
     }
     match command_line(pid) {
-        Some(cmd) => {
-            cmd.contains(&data_dir.display().to_string())
-                && (cmd.contains("postgres") || cmd.contains("pgx"))
-        }
+        Some(cmd) => engine_cmdline_matches(&cmd, data_dir),
         None => false,
     }
 }
@@ -354,6 +362,29 @@ mod tests {
         assert_eq!(p.sock_dir, Some(PathBuf::from("/Users/x/.pgx/run")));
         assert!(read_pid_file(&dir.join("nope")).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn engine_cmdline_matches_requires_dash_d_flag() {
+        let data = std::path::Path::new("/home/u/.pgx/data");
+        assert!(engine_cmdline_matches(
+            "/opt/pgx/bin/postgres -D /home/u/.pgx/data -k /home/u/.pgx/run -p 5432",
+            data
+        ));
+        // an unrelated process whose argv merely contains the data dir path must NOT match
+        assert!(!engine_cmdline_matches(
+            "tar czf backup.tgz /home/u/.pgx/data",
+            data
+        ));
+        assert!(!engine_cmdline_matches(
+            "vim /home/u/.pgx/data/postgresql.conf",
+            data
+        ));
+        // a different cluster must not match
+        assert!(!engine_cmdline_matches(
+            "/opt/pgx/bin/postgres -D /home/u/.pgx-other/data",
+            data
+        ));
     }
 
     #[cfg(target_os = "linux")]

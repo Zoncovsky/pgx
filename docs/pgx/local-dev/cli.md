@@ -39,11 +39,15 @@ Connect:
 
 | Command | What it does |
 |---|---|
-| `pgx create <db>` | Create an empty database. |
+| `pgx create <db> [--ttl <dur>]` | Create an empty database. `--ttl` makes it temporary (auto-expires); default is permanent. |
 | `pgx drop <db> [--force]` | Drop it; without `--force`, exit 6 if sessions are connected (data untouched); `--force` terminates them first. |
-| `pgx clone <src> <dst>` | Copy-on-write clone (`CREATE DATABASE … STRATEGY = FILE_COPY`); shares blocks on APFS/ZFS/reflink filesystems. |
-| `pgx ls` | List databases with size, connections and state (invalid databases from an interrupted drop are flagged). |
+| `pgx clone <src> <dst> [--ttl <dur>]` | Copy-on-write clone (`CREATE DATABASE … STRATEGY = FILE_COPY`); shares blocks on APFS/ZFS/reflink filesystems. TTL is never inherited from the source. |
+| `pgx ls` | List databases with status, TTL, remaining time and size. |
+| `pgx ttl <db> [<dur>\|unlimited]` | Show a database's TTL, or set/extend/disable it. See [ttl.md](ttl.md). |
 | `pgx url <db> [--socket]` | Print the connection URL (TCP with password, or Unix socket). |
+
+Temporary databases (`--ttl`) are deleted automatically by a background worker;
+permanent databases are never auto-deleted. Full semantics: [ttl.md](ttl.md).
 
 ## Tools
 

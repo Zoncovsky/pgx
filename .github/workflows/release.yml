@@ -13,7 +13,26 @@ on:
 permissions:
   contents: write
 jobs:
+  # Public release artifacts are built from main only: refuse a tag that does
+  # not point at a commit on the main branch (e.g. a tag pushed from prod or a
+  # feature branch). prod is deployed by PGRun from internal builds, never from
+  # these public release artifacts.
+  guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Tag must be an ancestor of origin/main
+        run: |
+          git fetch origin main --depth=0 || git fetch origin main
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "ok: $GITHUB_SHA is on main"
+          else
+            echo "::error::refusing to release $GITHUB_SHA — it is not on main. Public releases are cut from main only." >&2
+            exit 1
+          fi
   build:
+    needs: guard
     name: ${{ matrix.target }}
     strategy:
       fail-fast: false

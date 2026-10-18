@@ -47,6 +47,9 @@ pub enum Command {
         durability: Option<String>,
         force: bool,
     },
+    /// One command to a ready database: init if needed, start if needed, ensure
+    /// the default `app` database, print its URL. Idempotent.
+    Run,
     Start,
     /// Run the engine in the foreground (init if needed); the Docker/systemd entrypoint.
     Serve,
@@ -150,6 +153,11 @@ pub fn parse(args: &[String]) -> Result<(Global, Command)> {
                 force: has("force"),
             }
         }
+        "run" => {
+            only_flags(&[])?;
+            arity(0, "run")?;
+            Command::Run
+        }
         "start" => {
             only_flags(&[])?;
             arity(0, "start")?;
@@ -235,6 +243,11 @@ pub fn help_text() -> String {
 
 Usage: pgx [--json] <command> [arguments]
 
+Quick start
+  pgx run                 get a ready database in one step: init if needed,
+                          start if needed, ensure the `app` database, print its
+                          URL. Idempotent and safe to repeat; never resets data.
+
 Runtime
   pgx init [--port N] [--durability ephemeral|full] [--force]
                           create the cluster under $PGX_HOME (default ~/.pgx)
@@ -261,6 +274,9 @@ Options
 
 Environment
   PGX_HOME                data home (default ~/.pgx)
+  PGX_PORT                port for the first `pgx run`/`pgx serve` (else auto 5432-5500)
+  PGX_DURABILITY          ephemeral (default) or full, for the first init
+  PGX_PASSWORD            superuser password for the first init (else random)
 
 Exit codes
   0 ok · 1 engine or runtime error · 2 usage · 3 not initialised / not running
@@ -375,6 +391,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_run_subcommand() {
+        assert_eq!(parse(&args("run")).unwrap().1, Command::Run);
+        let (g, c) = parse(&args("--json run")).unwrap();
+        assert!(g.json);
+        assert_eq!(c, Command::Run);
+        // run takes no positionals and no flags of its own.
+        assert_eq!(parse(&args("run extra")).unwrap_err().code, ExitCode::Usage);
+        assert_eq!(
+            parse(&args("run --bogus")).unwrap_err().code,
+            ExitCode::Usage
+        );
+    }
+
+    #[test]
     fn unknown_subcommand_is_usage_error() {
         let e = parse(&args("frobnicate")).unwrap_err();
         assert_eq!(e.code, ExitCode::Usage);
@@ -407,8 +437,8 @@ mod tests {
     fn help_mentions_every_command() {
         let h = help_text();
         for c in [
-            "init", "start", "stop", "restart", "status", "create", "drop", "clone", "ls", "url",
-            "doctor", "version", "help",
+            "run", "init", "start", "stop", "restart", "status", "create", "drop", "clone", "ls",
+            "url", "doctor", "version", "help",
         ] {
             assert!(
                 h.contains(&format!("pgx {c}")) || h.contains(&format!("  {c}")),

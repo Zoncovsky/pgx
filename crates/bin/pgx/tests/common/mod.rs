@@ -103,6 +103,30 @@ impl Pgx {
         self.run(&["init", "--port", &port])
     }
 
+    /// `pgx run [extra...]` with PGX_PORT pinned to this harness's free port, so
+    /// a fresh run initialises there instead of scanning 5432-5500 (and colliding
+    /// with a real PostgreSQL or a sibling test).
+    pub fn run_cmd(&self, extra: &[&str]) -> Run {
+        let mut args = vec!["run"];
+        args.extend_from_slice(extra);
+        let out = self
+            .cmd(&args)
+            .env("PGX_PORT", self.port.to_string())
+            .output()
+            .expect("spawn pgx run");
+        Run::from(out)
+    }
+
+    /// Spawn `pgx run` without waiting — for concurrency tests.
+    pub fn spawn_run(&self) -> std::process::Child {
+        self.cmd(&["run"])
+            .env("PGX_PORT", self.port.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn pgx run")
+    }
+
     pub fn init_ok(&self) {
         let r = self.init();
         assert_eq!(r.code, 0, "pgx init failed: {}", r.all());

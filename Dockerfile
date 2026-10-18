@@ -21,7 +21,11 @@ ENV PATH="/usr/lib/postgresql/18/bin:${PATH}" CC=/usr/bin/cc
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked --bin postgres && cargo build --release --locked --bin pgx
-RUN dist/assemble.sh --out /out --version "${PGX_VERSION:-0.1.0-docker}" --pg-bindir /usr/lib/postgresql/18/bin \
+# initdb (run by assemble.sh to bake the base cluster) refuses to run as root,
+# so assemble as a non-root user. /out is owned by that user; the built
+# binaries and share trees under /src are world-readable.
+RUN useradd -m builder && mkdir -p /out && chown builder:builder /out \
+ && runuser -u builder -- dist/assemble.sh --out /out --version "${PGX_VERSION:-0.1.0-docker}" --pg-bindir /usr/lib/postgresql/18/bin \
  && mv /out/pgx-*/ /pgx
 
 # ---------- runtime ----------

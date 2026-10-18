@@ -110,8 +110,21 @@ impl Pgx {
     }
 
     pub fn run(&self, args: &[&str]) -> Run {
-        let out = self.cmd(args).output().expect("spawn pgx");
-        Run::from(out)
+        // Retry only a failure to SPAWN the process, not a non-zero exit (which
+        // is a real result and returned as-is): under heavy CI parallelism
+        // fork/exec can transiently fail (EAGAIN, or ETXTBSY on a freshly
+        // written binary). A real result returns immediately.
+        let mut last = None;
+        for _ in 0..5 {
+            match self.cmd(args).output() {
+                Ok(o) => return Run::from(o),
+                Err(e) => {
+                    last = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+        panic!("could not spawn pgx after retries: {}", last.unwrap());
     }
 
     pub fn init(&self) -> Run {

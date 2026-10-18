@@ -104,9 +104,18 @@ impl Pgx {
         let mut c = Command::new(self.bin());
         c.args(args)
             .env("PGX_HOME", &self.home)
+            // Poll TTL cleanup every second in tests so expiry is prompt.
+            .env("PGX_TTL_INTERVAL", "1")
             .env_remove("PGPORT")
             .env_remove("PGHOST");
         c
+    }
+
+    /// The background TTL supervisor's pid for this home, if it recorded one.
+    pub fn supervisor_pid(&self) -> Option<u32> {
+        std::fs::read_to_string(self.home.join("supervisor.pid"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
     }
 
     /// Run a prepared command, retrying only a failure to SPAWN the process
@@ -313,6 +322,10 @@ pub fn find_psql() -> PathBuf {
 
 impl Drop for Pgx {
     fn drop(&mut self) {
+        // Stop the TTL supervisor first so it does not linger after the home is gone.
+        if let Some(pid) = self.supervisor_pid() {
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
         let _ = self.cmd(&["stop", "--force"]).output();
         for pid in self.engine_pids() {
             unsafe { libc::kill(pid as i32, libc::SIGKILL) };

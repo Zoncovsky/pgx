@@ -335,6 +335,7 @@ pub fn ls(out: &Out) -> Result<ExitCode> {
             "status": status,
             "size_bytes": size,
             "connections": conns,
+            "is_template": row[2].as_deref() == Some("t"),
             "invalid": invalid,
             "ttl": ttl_label,
             "ttl_seconds": ttl_seconds,

@@ -52,13 +52,22 @@ pub fn run(out: &Out) -> Result<ExitCode> {
 
     let mut down_cycles = 0u32;
     loop {
-        if let Ok(ctx) = Ctx::load() {
-            if ctx.running_pid().is_some() {
+        // Home removed or re-initialised out from under us (e.g. a test tore it
+        // down, or `pgx init --force`): stop immediately.
+        if !home.is_initialized() {
+            out.note("pgx supervise: home no longer initialised; exiting");
+            let _ = std::fs::remove_file(&pid_path);
+            return Ok(ExitCode::Ok);
+        }
+        match Ctx::load() {
+            Ok(ctx) if ctx.running_pid().is_some() => {
                 down_cycles = 0;
                 run_cycle(&ctx);
-            } else {
-                // Tied to the runtime: once it is gone, exit so we never linger
-                // past `pgx stop` and a later `pgx start` owns respawning.
+            }
+            // Runtime down (or config temporarily unreadable). We are tied to the
+            // runtime's lifetime: exit so we never linger past `pgx stop`, and a
+            // later `pgx start` owns respawning.
+            _ => {
                 down_cycles += 1;
                 if down_cycles >= 2 {
                     out.note("pgx supervise: runtime not running; exiting");

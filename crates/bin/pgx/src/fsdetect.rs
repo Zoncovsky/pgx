@@ -28,8 +28,12 @@ fn clone_file(src: &Path, dst: &Path) -> bool {
 #[cfg(target_os = "linux")]
 fn clone_file(src: &Path, dst: &Path) -> bool {
     use std::os::fd::AsRawFd;
-    let Ok(s) = std::fs::File::open(src) else { return false };
-    let Ok(d) = std::fs::File::create(dst) else { return false };
+    let Ok(s) = std::fs::File::open(src) else {
+        return false;
+    };
+    let Ok(d) = std::fs::File::create(dst) else {
+        return false;
+    };
     unsafe { libc::ioctl(d.as_raw_fd(), libc::FICLONE as _, s.as_raw_fd()) == 0 }
 }
 
@@ -40,7 +44,10 @@ fn clone_file(_src: &Path, _dst: &Path) -> bool {
 
 /// Filesystem type name of the directory, for `pgx doctor` (best effort).
 pub fn fs_type_name(dir: &Path) -> String {
-    let out = std::process::Command::new("df").args(["-P", "-T"]).arg(dir).output();
+    let out = std::process::Command::new("df")
+        .args(["-P", "-T"])
+        .arg(dir)
+        .output();
     if let Ok(o) = out {
         if o.status.success() {
             if let Some(line) = String::from_utf8_lossy(&o.stdout).lines().nth(1) {
@@ -58,8 +65,13 @@ pub fn fs_type_name(dir: &Path) -> String {
             // "/dev/disk3s1 on / (apfs, local, journaled)"
             if let Some((_, rest)) = line.split_once(" on ") {
                 if let Some((mp, kind)) = rest.split_once(" (") {
-                    if dir_s.starts_with(mp) && best.as_ref().map(|(l, _)| mp.len() > *l).unwrap_or(true) {
-                        best = Some((mp.len(), kind.split([',', ')']).next().unwrap_or("").to_string()));
+                    if dir_s.starts_with(mp)
+                        && best.as_ref().map(|(l, _)| mp.len() > *l).unwrap_or(true)
+                    {
+                        best = Some((
+                            mp.len(),
+                            kind.split([',', ')']).next().unwrap_or("").to_string(),
+                        ));
                     }
                 }
             }
@@ -79,7 +91,15 @@ mod tests {
     fn probe_cleans_up() {
         let dir = std::env::temp_dir();
         let _ = supports_block_clone(&dir);
-        let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with(".pgx-clone-probe")).collect();
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".pgx-clone-probe")
+            })
+            .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 

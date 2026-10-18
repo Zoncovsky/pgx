@@ -12,7 +12,10 @@ fn up_with_source() -> Pgx {
 }
 
 fn base_dirs(p: &Pgx) -> Vec<String> {
-    let mut v: Vec<String> = std::fs::read_dir(p.home.join("data/base")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    let mut v: Vec<String> = std::fs::read_dir(p.home.join("data/base"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
     v.sort();
     v
 }
@@ -22,13 +25,43 @@ fn clone_is_isolated() {
     let p = up_with_source();
     let r = p.run(&["clone", "src", "c1"]);
     assert_eq!(r.code, 0, "{}", r.all());
-    assert_eq!(p.psql("c1", "SELECT count(*) FROM t").stdout.trim(), "20000");
-    assert_eq!(p.psql("c1", "INSERT INTO t VALUES (99999, 'clone only'); DELETE FROM t WHERE id <= 10").code, 0);
-    assert_eq!(p.psql("src", "SELECT count(*) FROM t").stdout.trim(), "20000", "clone write leaked into the source");
-    assert_eq!(p.psql("src", "SELECT count(*) FROM t WHERE id = 99999").stdout.trim(), "0");
-    assert_eq!(p.psql("src", "UPDATE t SET v = 'changed' WHERE id = 20").code, 0);
-    assert_eq!(p.psql("c1", "SELECT v FROM t WHERE id = 20").stdout.trim(), "v20", "source write leaked into the clone");
-    assert_eq!(p.psql("c1", "SELECT count(*) FROM t").stdout.trim(), "19991");
+    assert_eq!(
+        p.psql("c1", "SELECT count(*) FROM t").stdout.trim(),
+        "20000"
+    );
+    assert_eq!(
+        p.psql(
+            "c1",
+            "INSERT INTO t VALUES (99999, 'clone only'); DELETE FROM t WHERE id <= 10"
+        )
+        .code,
+        0
+    );
+    assert_eq!(
+        p.psql("src", "SELECT count(*) FROM t").stdout.trim(),
+        "20000",
+        "clone write leaked into the source"
+    );
+    assert_eq!(
+        p.psql("src", "SELECT count(*) FROM t WHERE id = 99999")
+            .stdout
+            .trim(),
+        "0"
+    );
+    assert_eq!(
+        p.psql("src", "UPDATE t SET v = 'changed' WHERE id = 20")
+            .code,
+        0
+    );
+    assert_eq!(
+        p.psql("c1", "SELECT v FROM t WHERE id = 20").stdout.trim(),
+        "v20",
+        "source write leaked into the clone"
+    );
+    assert_eq!(
+        p.psql("c1", "SELECT count(*) FROM t").stdout.trim(),
+        "19991"
+    );
 }
 
 #[test]
@@ -49,13 +82,32 @@ fn clone_json_reports_method_and_timing() {
 fn clone_source_in_use_is_exit_6() {
     let p = up_with_source();
     let mut holder = std::process::Command::new(common::find_psql())
-        .args(["-X", "-h", &p.sock_dir().to_string_lossy(), "-p", &p.port.to_string(), "-U", "postgres", "-d", "src", "-Atc", "BEGIN; INSERT INTO t VALUES (50000, 'uncommitted'); SELECT pg_sleep(20)"])
+        .args([
+            "-X",
+            "-h",
+            &p.sock_dir().to_string_lossy(),
+            "-p",
+            &p.port.to_string(),
+            "-U",
+            "postgres",
+            "-d",
+            "src",
+            "-Atc",
+            "BEGIN; INSERT INTO t VALUES (50000, 'uncommitted'); SELECT pg_sleep(20)",
+        ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
     for _ in 0..200 {
-        if p.psql("postgres", "SELECT count(*) FROM pg_stat_activity WHERE datname = 'src'").stdout.trim() == "1" {
+        if p.psql(
+            "postgres",
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = 'src'",
+        )
+        .stdout
+        .trim()
+            == "1"
+        {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -66,7 +118,15 @@ fn clone_source_in_use_is_exit_6() {
     let _ = holder.wait();
     assert_eq!(r.code, 6, "{}", r.all());
     assert!(r.stderr.contains("connected"), "{}", r.stderr);
-    assert_eq!(p.psql("postgres", "SELECT count(*) FROM pg_database WHERE datname = 'c3'").stdout.trim(), "0");
+    assert_eq!(
+        p.psql(
+            "postgres",
+            "SELECT count(*) FROM pg_database WHERE datname = 'c3'"
+        )
+        .stdout
+        .trim(),
+        "0"
+    );
     assert_eq!(base_dirs(&p), before, "refused clone left files behind");
 }
 
@@ -79,8 +139,21 @@ fn clone_missing_source_is_exit_5_and_existing_target_is_exit_4() {
     let before = base_dirs(&p);
     let r = p.run(&["clone", "src", "taken"]);
     assert_eq!(r.code, 4, "{}", r.all());
-    assert_eq!(base_dirs(&p), before, "failed clone left a partial directory");
-    assert_eq!(p.psql("taken", "SELECT count(*) FROM pg_tables WHERE tablename = 't'").stdout.trim(), "0", "existing target was overwritten");
+    assert_eq!(
+        base_dirs(&p),
+        before,
+        "failed clone left a partial directory"
+    );
+    assert_eq!(
+        p.psql(
+            "taken",
+            "SELECT count(*) FROM pg_tables WHERE tablename = 't'"
+        )
+        .stdout
+        .trim(),
+        "0",
+        "existing target was overwritten"
+    );
 }
 
 #[test]
@@ -113,14 +186,41 @@ fn concurrent_clones_8() {
         names.push(name);
     }
     for (i, name) in names.iter().enumerate() {
-        assert_eq!(p.psql(name, "SELECT count(*) FROM t").stdout.trim(), "20000", "{name}");
-        assert_eq!(p.psql(name, &format!("INSERT INTO t VALUES (100000 + {i}, 'mine')")).code, 0);
+        assert_eq!(
+            p.psql(name, "SELECT count(*) FROM t").stdout.trim(),
+            "20000",
+            "{name}"
+        );
+        assert_eq!(
+            p.psql(
+                name,
+                &format!("INSERT INTO t VALUES (100000 + {i}, 'mine')")
+            )
+            .code,
+            0
+        );
     }
     for (i, name) in names.iter().enumerate() {
-        assert_eq!(p.psql(name, "SELECT count(*) FROM t WHERE id >= 100000").stdout.trim(), "1", "{name} sees another clone's row");
-        assert_eq!(p.psql(name, "SELECT id FROM t WHERE id >= 100000").stdout.trim(), (100000 + i).to_string());
+        assert_eq!(
+            p.psql(name, "SELECT count(*) FROM t WHERE id >= 100000")
+                .stdout
+                .trim(),
+            "1",
+            "{name} sees another clone's row"
+        );
+        assert_eq!(
+            p.psql(name, "SELECT id FROM t WHERE id >= 100000")
+                .stdout
+                .trim(),
+            (100000 + i).to_string()
+        );
     }
-    assert_eq!(p.psql("src", "SELECT count(*) FROM t WHERE id >= 100000").stdout.trim(), "0");
+    assert_eq!(
+        p.psql("src", "SELECT count(*) FROM t WHERE id >= 100000")
+            .stdout
+            .trim(),
+        "0"
+    );
     let j = p.run(&["--json", "ls"]).json();
     assert_eq!(j.as_array().unwrap().len(), 1 + 1 + 8, "{j}");
 }
@@ -132,8 +232,15 @@ fn clone_then_drop_cycles_leave_no_files() {
     for i in 0..20 {
         let name = format!("cy{i}");
         assert_eq!(p.run(&["clone", "src", &name]).code, 0, "cycle {i}");
-        assert_eq!(p.psql(&name, "SELECT count(*) FROM t").stdout.trim(), "20000");
+        assert_eq!(
+            p.psql(&name, "SELECT count(*) FROM t").stdout.trim(),
+            "20000"
+        );
         assert_eq!(p.run(&["drop", &name]).code, 0, "cycle {i}");
     }
-    assert_eq!(base_dirs(&p), before, "clone/drop cycles leaked base directories");
+    assert_eq!(
+        base_dirs(&p),
+        before,
+        "clone/drop cycles leaked base directories"
+    );
 }

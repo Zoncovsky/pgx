@@ -52,7 +52,10 @@ pub struct QueryResult {
 impl QueryResult {
     /// First column of the first row, as text.
     pub fn scalar(&self) -> Option<&str> {
-        self.rows.first().and_then(|r| r.first()).and_then(|v| v.as_deref())
+        self.rows
+            .first()
+            .and_then(|r| r.first())
+            .and_then(|v| v.as_deref())
     }
 }
 
@@ -63,7 +66,12 @@ pub struct Client<S> {
 
 pub fn encode_startup(user: &str, database: &str) -> Vec<u8> {
     let mut body = Vec::new();
-    for (k, v) in [("user", user), ("database", database), ("client_encoding", "UTF8"), ("application_name", "pgx")] {
+    for (k, v) in [
+        ("user", user),
+        ("database", database),
+        ("client_encoding", "UTF8"),
+        ("application_name", "pgx"),
+    ] {
         body.extend_from_slice(k.as_bytes());
         body.push(0);
         body.extend_from_slice(v.as_bytes());
@@ -86,9 +94,17 @@ pub fn encode_query(sql: &str) -> Vec<u8> {
 }
 
 pub fn parse_error_fields(payload: &[u8]) -> DbError {
-    let mut e = DbError { severity: String::new(), sqlstate: String::new(), message: String::new(), detail: None, hint: None };
+    let mut e = DbError {
+        severity: String::new(),
+        sqlstate: String::new(),
+        message: String::new(),
+        detail: None,
+        hint: None,
+    };
     for field in payload.split(|b| *b == 0) {
-        let Some((&tag, rest)) = field.split_first() else { continue };
+        let Some((&tag, rest)) = field.split_first() else {
+            continue;
+        };
         let text = String::from_utf8_lossy(rest).into_owned();
         match tag {
             b'S' => e.severity = text,
@@ -120,8 +136,10 @@ fn read_exact<S: Read>(s: &mut S, n: usize) -> Result<Vec<u8>, WireError> {
 fn read_message<S: Read>(s: &mut S) -> Result<(u8, Vec<u8>), WireError> {
     let head = read_exact(s, 5)?;
     let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
-    if len < 4 || len > 64 * 1024 * 1024 {
-        return Err(WireError::Protocol(format!("message length {len} out of range")));
+    if !(4..=64 * 1024 * 1024).contains(&len) {
+        return Err(WireError::Protocol(format!(
+            "message length {len} out of range"
+        )));
     }
     let payload = read_exact(s, len - 4)?;
     Ok((head[0], payload))
@@ -129,7 +147,11 @@ fn read_message<S: Read>(s: &mut S) -> Result<(u8, Vec<u8>), WireError> {
 
 fn cstring_at(buf: &[u8], pos: &mut usize) -> Result<String, WireError> {
     let start = *pos;
-    let end = buf[start..].iter().position(|b| *b == 0).ok_or_else(|| WireError::Protocol("unterminated string".into()))? + start;
+    let end = buf[start..]
+        .iter()
+        .position(|b| *b == 0)
+        .ok_or_else(|| WireError::Protocol("unterminated string".into()))?
+        + start;
     *pos = end + 1;
     Ok(String::from_utf8_lossy(&buf[start..end]).into_owned())
 }
@@ -139,25 +161,37 @@ impl Client<UnixStream> {
         sock_dir.join(format!(".s.PGSQL.{port}"))
     }
 
-    pub fn connect_unix(sock_dir: &Path, port: u16, user: &str, database: &str, timeout: Duration) -> Result<Self, WireError> {
+    pub fn connect_unix(
+        sock_dir: &Path,
+        port: u16,
+        user: &str,
+        database: &str,
+        timeout: Duration,
+    ) -> Result<Self, WireError> {
         let stream = UnixStream::connect(Self::socket_path(sock_dir, port))?;
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;
         Client::handshake(stream, user, database)
     }
-
 }
 
 impl<S: Read + Write> Client<S> {
     pub fn handshake(mut stream: S, user: &str, database: &str) -> Result<Self, WireError> {
         stream.write_all(&encode_startup(user, database))?;
         stream.flush()?;
-        let mut client = Client { stream, parameters: HashMap::new() };
+        let mut client = Client {
+            stream,
+            parameters: HashMap::new(),
+        };
         loop {
             let (tag, payload) = read_message(&mut client.stream)?;
             match tag {
                 b'R' => {
-                    let kind = u32::from_be_bytes(payload[..4].try_into().map_err(|_| WireError::Protocol("short auth message".into()))?);
+                    let kind = u32::from_be_bytes(
+                        payload[..4]
+                            .try_into()
+                            .map_err(|_| WireError::Protocol("short auth message".into()))?,
+                    );
                     if kind != 0 {
                         return Err(WireError::Protocol(format!("unexpected authentication request {kind}; the Unix socket must use trust authentication")));
                     }
@@ -171,7 +205,12 @@ impl<S: Read + Write> Client<S> {
                 b'K' | b'N' => {}
                 b'E' => return Err(WireError::Db(parse_error_fields(&payload))),
                 b'Z' => return Ok(client),
-                other => return Err(WireError::Protocol(format!("unexpected message {:?} during startup", other as char))),
+                other => {
+                    return Err(WireError::Protocol(format!(
+                        "unexpected message {:?} during startup",
+                        other as char
+                    )))
+                }
             }
         }
     }
@@ -207,13 +246,19 @@ impl<S: Read + Write> Client<S> {
                     let mut pos = 2;
                     let mut row = Vec::with_capacity(n);
                     for _ in 0..n {
-                        let len = i32::from_be_bytes(payload[pos..pos + 4].try_into().map_err(|_| WireError::Protocol("short data row".into()))?);
+                        let len = i32::from_be_bytes(
+                            payload[pos..pos + 4]
+                                .try_into()
+                                .map_err(|_| WireError::Protocol("short data row".into()))?,
+                        );
                         pos += 4;
                         if len < 0 {
                             row.push(None);
                         } else {
                             let len = len as usize;
-                            row.push(Some(String::from_utf8_lossy(&payload[pos..pos + len]).into_owned()));
+                            row.push(Some(
+                                String::from_utf8_lossy(&payload[pos..pos + len]).into_owned(),
+                            ));
                             pos += len;
                         }
                     }
@@ -232,7 +277,12 @@ impl<S: Read + Write> Client<S> {
                 }
                 // EmptyQueryResponse, NoticeResponse, ParameterStatus, CopyIn/Out are not used by the CLI.
                 b'I' | b'N' | b'S' | b'A' => {}
-                other => return Err(WireError::Protocol(format!("unexpected message {:?} in query response", other as char))),
+                other => {
+                    return Err(WireError::Protocol(format!(
+                        "unexpected message {:?} in query response",
+                        other as char
+                    )))
+                }
             }
         }
     }
@@ -306,7 +356,8 @@ mod tests {
     fn startup_message_bytes() {
         let b = encode_startup("postgres", "mydb");
         let mut expect = Vec::new();
-        let body = b"user\0postgres\0database\0mydb\0client_encoding\0UTF8\0application_name\0pgx\0\0";
+        let body =
+            b"user\0postgres\0database\0mydb\0client_encoding\0UTF8\0application_name\0pgx\0\0";
         expect.extend_from_slice(&((body.len() + 8) as u32).to_be_bytes());
         expect.extend_from_slice(&196608u32.to_be_bytes());
         expect.extend_from_slice(body);
@@ -320,7 +371,9 @@ mod tests {
 
     #[test]
     fn parse_error_response_fields() {
-        let e = parse_error_fields(b"SERROR\0C42P01\0Mrelation \"x\" does not exist\0Hcheck the name\0\0");
+        let e = parse_error_fields(
+            b"SERROR\0C42P01\0Mrelation \"x\" does not exist\0Hcheck the name\0\0",
+        );
         assert_eq!(e.severity, "ERROR");
         assert_eq!(e.sqlstate, "42P01");
         assert_eq!(e.message, "relation \"x\" does not exist");
@@ -339,12 +392,21 @@ mod tests {
         server.extend(data_row(&[Some("2"), Some("x")]));
         server.extend(msg(b'C', b"SELECT 2\0"));
         server.extend(msg(b'Z', b"I"));
-        let fake = Fake { input: Cursor::new(server), output: Vec::new() };
+        let fake = Fake {
+            input: Cursor::new(server),
+            output: Vec::new(),
+        };
         let mut c = Client::handshake(fake, "postgres", "db").unwrap();
         assert_eq!(c.parameter("server_version"), Some("18.6"));
         let r = c.simple_query("SELECT * FROM t").unwrap();
         assert_eq!(r.columns, vec!["a", "b"]);
-        assert_eq!(r.rows, vec![vec![Some("1".to_string()), None], vec![Some("2".to_string()), Some("x".to_string())]]);
+        assert_eq!(
+            r.rows,
+            vec![
+                vec![Some("1".to_string()), None],
+                vec![Some("2".to_string()), Some("x".to_string())]
+            ]
+        );
         assert_eq!(r.tags, vec!["SELECT 2"]);
         let written = &c.stream.output;
         assert!(written.starts_with(&encode_startup("postgres", "db")));
@@ -360,7 +422,10 @@ mod tests {
         server.extend(msg(b'Z', b"I"));
         server.extend(msg(b'C', b"CREATE DATABASE\0"));
         server.extend(msg(b'Z', b"I"));
-        let fake = Fake { input: Cursor::new(server), output: Vec::new() };
+        let fake = Fake {
+            input: Cursor::new(server),
+            output: Vec::new(),
+        };
         let mut c = Client::handshake(fake, "postgres", "db").unwrap();
         match c.simple_query("SELECT * FROM missing") {
             Err(WireError::Db(e)) => assert_eq!(e.sqlstate, "42P01"),
@@ -375,7 +440,10 @@ mod tests {
     fn unexpected_authentication_request_is_an_error() {
         let mut server = Vec::new();
         server.extend(msg(b'R', &10u32.to_be_bytes())); // AuthenticationSASL
-        let fake = Fake { input: Cursor::new(server), output: Vec::new() };
+        let fake = Fake {
+            input: Cursor::new(server),
+            output: Vec::new(),
+        };
         match Client::handshake(fake, "postgres", "db") {
             Err(WireError::Protocol(m)) => assert!(m.contains("authentication"), "{m}"),
             other => panic!("expected protocol error, got {:?}", other.map(|_| ())),
@@ -396,9 +464,21 @@ mod tests {
     #[ignore = "needs PGX_TEST_SOCKET / PGX_TEST_PORT pointing at a running engine"]
     fn query_against_live_server() {
         let dir = std::env::var("PGX_TEST_SOCKET").expect("PGX_TEST_SOCKET");
-        let port: u16 = std::env::var("PGX_TEST_PORT").expect("PGX_TEST_PORT").parse().unwrap();
-        let mut c = Client::connect_unix(std::path::Path::new(&dir), port, "postgres", "postgres", std::time::Duration::from_secs(5)).unwrap();
-        let r = c.simple_query("SELECT 1 AS one, NULL::text AS none").unwrap();
+        let port: u16 = std::env::var("PGX_TEST_PORT")
+            .expect("PGX_TEST_PORT")
+            .parse()
+            .unwrap();
+        let mut c = Client::connect_unix(
+            std::path::Path::new(&dir),
+            port,
+            "postgres",
+            "postgres",
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        let r = c
+            .simple_query("SELECT 1 AS one, NULL::text AS none")
+            .unwrap();
         assert_eq!(r.columns, vec!["one", "none"]);
         assert_eq!(r.rows, vec![vec![Some("1".to_string()), None]]);
     }

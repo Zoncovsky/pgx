@@ -10,7 +10,11 @@ pub struct PgxError {
 
 impl PgxError {
     pub fn new(code: ExitCode, message: impl Into<String>) -> Self {
-        PgxError { code, message: message.into(), hint: None }
+        PgxError {
+            code,
+            message: message.into(),
+            hint: None,
+        }
     }
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());

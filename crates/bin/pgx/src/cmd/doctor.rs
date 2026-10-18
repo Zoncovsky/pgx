@@ -20,13 +20,28 @@ struct Check {
 }
 
 fn ok(name: &'static str, detail: impl Into<String>) -> Check {
-    Check { name, status: "ok", detail: detail.into(), hint: None }
+    Check {
+        name,
+        status: "ok",
+        detail: detail.into(),
+        hint: None,
+    }
 }
 fn warn(name: &'static str, detail: impl Into<String>, hint: impl Into<String>) -> Check {
-    Check { name, status: "warn", detail: detail.into(), hint: Some(hint.into()) }
+    Check {
+        name,
+        status: "warn",
+        detail: detail.into(),
+        hint: Some(hint.into()),
+    }
 }
 fn fail(name: &'static str, detail: impl Into<String>, hint: impl Into<String>) -> Check {
-    Check { name, status: "fail", detail: detail.into(), hint: Some(hint.into()) }
+    Check {
+        name,
+        status: "fail",
+        detail: detail.into(),
+        hint: Some(hint.into()),
+    }
 }
 
 fn disk_free_bytes(path: &Path) -> Option<u64> {
@@ -36,11 +51,15 @@ fn disk_free_bytes(path: &Path) -> Option<u64> {
     if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
         return None;
     }
-    Some(st.f_bavail as u64 * st.f_frsize as u64)
+    Some(st.f_bavail as u64 * st.f_frsize)
 }
 
 fn mb(b: u64) -> String {
-    if b >= 1 << 30 { format!("{:.1} GB", b as f64 / (1u64 << 30) as f64) } else { format!("{} MB", b >> 20) }
+    if b >= 1 << 30 {
+        format!("{:.1} GB", b as f64 / (1u64 << 30) as f64)
+    } else {
+        format!("{} MB", b >> 20)
+    }
 }
 
 /// Directories under base/ that no pg_database row references. Read-only, and
@@ -49,12 +68,14 @@ fn mb(b: u64) -> String {
 /// 2 minutes is treated as a CREATE DATABASE that may still be in progress.
 pub fn orphan_dirs(data: &Path, known_oids: &[String]) -> Vec<(String, u64)> {
     let base = data.join("base");
-    let Ok(entries) = std::fs::read_dir(&base) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(&base) else {
+        return Vec::new();
+    };
     let now = std::time::SystemTime::now();
     let mut out = Vec::new();
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if !name.chars().all(|c| c.is_ascii_digit()) || known_oids.iter().any(|k| *k == name) {
+        if !name.chars().all(|c| c.is_ascii_digit()) || known_oids.contains(&name) {
             continue;
         }
         let Ok(meta) = e.metadata() else { continue };
@@ -62,7 +83,11 @@ pub fn orphan_dirs(data: &Path, known_oids: &[String]) -> Vec<(String, u64)> {
             continue;
         }
         if let Ok(m) = meta.modified() {
-            if now.duration_since(m).map(|d| d.as_secs() < 120).unwrap_or(true) {
+            if now
+                .duration_since(m)
+                .map(|d| d.as_secs() < 120)
+                .unwrap_or(true)
+            {
                 continue;
             }
         }
@@ -74,16 +99,38 @@ pub fn orphan_dirs(data: &Path, known_oids: &[String]) -> Vec<(String, u64)> {
 }
 
 fn dir_size(p: &Path) -> u64 {
-    std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| e.metadata().map(|m| if m.is_dir() { dir_size(&e.path()) } else { m.len() }).unwrap_or(0)).sum()).unwrap_or(0)
+    std::fs::read_dir(p)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| {
+                    e.metadata()
+                        .map(|m| {
+                            if m.is_dir() {
+                                dir_size(&e.path())
+                            } else {
+                                m.len()
+                            }
+                        })
+                        .unwrap_or(0)
+                })
+                .sum()
+        })
+        .unwrap_or(0)
 }
 
 fn orphan_check(data: &Path, known: &[String]) -> Check {
     let orphans = orphan_dirs(data, known);
     if orphans.is_empty() {
-        return ok("orphan_dirs", "every base/<oid> directory belongs to a database");
+        return ok(
+            "orphan_dirs",
+            "every base/<oid> directory belongs to a database",
+        );
     }
     let total: u64 = orphans.iter().map(|(_, s)| *s).sum();
-    let names: Vec<String> = orphans.iter().map(|(n, s)| format!("{n} ({})", mb(*s))).collect();
+    let names: Vec<String> = orphans
+        .iter()
+        .map(|(n, s)| format!("{n} ({})", mb(*s)))
+        .collect();
     warn(
         "orphan_dirs",
         format!("{} base/<oid> directory(ies) not referenced by pg_database, {} in total: {}", orphans.len(), mb(total), names.join(", ")),
@@ -106,46 +153,115 @@ pub fn run(out: &Out) -> Result<ExitCode> {
     if let Some(install) = &install {
         let problems = install.verify();
         if problems.is_empty() {
-            checks.push(ok("install", format!("complete at {}", install.prefix.display())));
+            checks.push(ok(
+                "install",
+                format!("complete at {}", install.prefix.display()),
+            ));
         } else {
             let list: Vec<&str> = problems.iter().map(|p| p.what.as_str()).collect();
-            checks.push(fail("install", format!("incomplete at {}: missing {}", install.prefix.display(), list.join(", ")), "reinstall PGX (the distribution layout is in share/pgx/layout.md)"));
+            checks.push(fail(
+                "install",
+                format!(
+                    "incomplete at {}: missing {}",
+                    install.prefix.display(),
+                    list.join(", ")
+                ),
+                "reinstall PGX (the distribution layout is in share/pgx/layout.md)",
+            ));
         }
         match install.dist_info() {
-            Ok(d) => checks.push(ok("dist", format!("pgx {} engine {} PostgreSQL {} {}/{}", d.pgx_version, d.engine_commit, d.postgres_compat, d.os, d.arch))),
+            Ok(d) => checks.push(ok(
+                "dist",
+                format!(
+                    "pgx {} engine {} PostgreSQL {} {}/{}",
+                    d.pgx_version, d.engine_commit, d.postgres_compat, d.os, d.arch
+                ),
+            )),
             Err(e) => checks.push(fail("dist", e.message.clone(), "reinstall PGX")),
         }
-        match std::process::Command::new(&install.engine).arg("--version").output() {
-            Ok(o) if o.status.success() => checks.push(ok("engine", String::from_utf8_lossy(&o.stdout).trim().to_string())),
-            Ok(o) => checks.push(fail("engine", format!("{} exited {}: {}", install.engine.display(), o.status, String::from_utf8_lossy(&o.stderr).trim()), "the engine binary does not run on this machine; reinstall for this OS and CPU")),
-            Err(e) => checks.push(fail("engine", format!("cannot run {}: {e}", install.engine.display()), "check the file exists and is executable")),
+        match std::process::Command::new(&install.engine)
+            .arg("--version")
+            .output()
+        {
+            Ok(o) if o.status.success() => checks.push(ok(
+                "engine",
+                String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            )),
+            Ok(o) => checks.push(fail(
+                "engine",
+                format!(
+                    "{} exited {}: {}",
+                    install.engine.display(),
+                    o.status,
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ),
+                "the engine binary does not run on this machine; reinstall for this OS and CPU",
+            )),
+            Err(e) => checks.push(fail(
+                "engine",
+                format!("cannot run {}: {e}", install.engine.display()),
+                "check the file exists and is executable",
+            )),
         }
     }
 
     // Data directory and config.
     let initialized = home.is_initialized();
     if initialized {
-        let ver = std::fs::read_to_string(home.data.join("PG_VERSION")).unwrap_or_default().trim().to_string();
-        checks.push(ok("data_dir", format!("{} (PostgreSQL {ver} format)", home.data.display())));
+        let ver = std::fs::read_to_string(home.data.join("PG_VERSION"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        checks.push(ok(
+            "data_dir",
+            format!("{} (PostgreSQL {ver} format)", home.data.display()),
+        ));
     } else if home.data.exists() || home.config_file.exists() {
-        checks.push(fail("data_dir", format!("{} is incomplete (data dir or config.json missing)", home.root.display()), "`pgx init --force` recreates it (deletes every database)"));
+        checks.push(fail(
+            "data_dir",
+            format!(
+                "{} is incomplete (data dir or config.json missing)",
+                home.root.display()
+            ),
+            "`pgx init --force` recreates it (deletes every database)",
+        ));
     } else {
-        checks.push(fail("data_dir", format!("not initialised at {}", home.root.display()), "run `pgx init`"));
+        checks.push(fail(
+            "data_dir",
+            format!("not initialised at {}", home.root.display()),
+            "run `pgx init`",
+        ));
     }
     let config = if home.config_file.exists() {
         match Config::load(&home.config_file) {
             Ok(c) => {
                 use std::os::unix::fs::PermissionsExt;
-                let mode = std::fs::metadata(&home.config_file).map(|m| m.permissions().mode() & 0o777).unwrap_or(0);
+                let mode = std::fs::metadata(&home.config_file)
+                    .map(|m| m.permissions().mode() & 0o777)
+                    .unwrap_or(0);
                 if mode & 0o077 != 0 {
-                    checks.push(warn("config", format!("{} has mode {mode:o}; it holds the superuser password", home.config_file.display()), format!("chmod 600 {}", home.config_file.display())));
+                    checks.push(warn(
+                        "config",
+                        format!(
+                            "{} has mode {mode:o}; it holds the superuser password",
+                            home.config_file.display()
+                        ),
+                        format!("chmod 600 {}", home.config_file.display()),
+                    ));
                 } else {
-                    checks.push(ok("config", format!("port {}, durability {}", c.port, c.durability.as_str())));
+                    checks.push(ok(
+                        "config",
+                        format!("port {}, durability {}", c.port, c.durability.as_str()),
+                    ));
                 }
                 Some(c)
             }
             Err(e) => {
-                checks.push(fail("config", e.message.clone(), "`pgx init --force` recreates it"));
+                checks.push(fail(
+                    "config",
+                    e.message.clone(),
+                    "`pgx init --force` recreates it",
+                ));
                 None
             }
         }
@@ -154,13 +270,26 @@ pub fn run(out: &Out) -> Result<ExitCode> {
     };
 
     // Socket path, runtime, port.
-    let sock_dir = config.as_ref().and_then(|c| c.run_dir.clone()).unwrap_or_else(|| home.run.clone());
+    let sock_dir = config
+        .as_ref()
+        .and_then(|c| c.run_dir.clone())
+        .unwrap_or_else(|| home.run.clone());
     let port = config.as_ref().map(|c| c.port).unwrap_or(5432);
     let len = socket_path_len(&sock_dir, port);
     if len > MAX_SOCKET_PATH {
-        checks.push(fail("socket_path", format!("{}/.s.PGSQL.{port} is {len} bytes (limit {MAX_SOCKET_PATH})", sock_dir.display()), "set PGX_RUN_DIR to a short directory and `pgx init --force`"));
+        checks.push(fail(
+            "socket_path",
+            format!(
+                "{}/.s.PGSQL.{port} is {len} bytes (limit {MAX_SOCKET_PATH})",
+                sock_dir.display()
+            ),
+            "set PGX_RUN_DIR to a short directory and `pgx init --force`",
+        ));
     } else {
-        checks.push(ok("socket_path", format!("{}/.s.PGSQL.{port} ({len} bytes)", sock_dir.display())));
+        checks.push(ok(
+            "socket_path",
+            format!("{}/.s.PGSQL.{port} ({len} bytes)", sock_dir.display()),
+        ));
     }
     let mut running_pid = None;
     match process::read_pid_file(&home.data) {
@@ -168,7 +297,19 @@ pub fn run(out: &Out) -> Result<ExitCode> {
             running_pid = Some(pf.pid);
             checks.push(ok("runtime", format!("running, pid {}", pf.pid)));
         }
-        Some(pf) => checks.push(warn("runtime", format!("not running; stale postmaster.pid names pid {} ({})", pf.pid, if process::pid_alive(pf.pid) { "alive, not PGX" } else { "dead" }), "`pgx start` removes it")),
+        Some(pf) => checks.push(warn(
+            "runtime",
+            format!(
+                "not running; stale postmaster.pid names pid {} ({})",
+                pf.pid,
+                if process::pid_alive(pf.pid) {
+                    "alive, not PGX"
+                } else {
+                    "dead"
+                }
+            ),
+            "`pgx start` removes it",
+        )),
         None if initialized => checks.push(ok("runtime", "not running")),
         None => checks.push(warn("runtime", "no data directory", "run `pgx init`")),
     }
@@ -177,69 +318,169 @@ pub fn run(out: &Out) -> Result<ExitCode> {
     } else if port_is_free(port) {
         checks.push(ok("port", format!("{port} is free")));
     } else {
-        checks.push(fail("port", format!("{port} is in use by another process"), "stop that process or `pgx init --force --port N`"));
+        checks.push(fail(
+            "port",
+            format!("{port} is in use by another process"),
+            "stop that process or `pgx init --force --port N`",
+        ));
     }
 
     // Host resources.
-    let probe_dir = if home.data.is_dir() { home.data.clone() } else if home.root.is_dir() { home.root.clone() } else { std::env::temp_dir() };
+    let probe_dir = if home.data.is_dir() {
+        home.data.clone()
+    } else if home.root.is_dir() {
+        home.root.clone()
+    } else {
+        std::env::temp_dir()
+    };
     match disk_free_bytes(&probe_dir) {
-        Some(b) if b < 100 << 20 => checks.push(fail("disk_free", format!("{} free at {}", mb(b), probe_dir.display()), "free disk space; the engine stops writes at 53100 when the disk is full")),
-        Some(b) if b < 1 << 30 => checks.push(warn("disk_free", format!("{} free at {}", mb(b), probe_dir.display()), "less than 1 GB free")),
-        Some(b) => checks.push(ok("disk_free", format!("{} free at {}", mb(b), probe_dir.display()))),
-        None => checks.push(warn("disk_free", format!("cannot statvfs {}", probe_dir.display()), "")),
+        Some(b) if b < 100 << 20 => checks.push(fail(
+            "disk_free",
+            format!("{} free at {}", mb(b), probe_dir.display()),
+            "free disk space; the engine stops writes at 53100 when the disk is full",
+        )),
+        Some(b) if b < 1 << 30 => checks.push(warn(
+            "disk_free",
+            format!("{} free at {}", mb(b), probe_dir.display()),
+            "less than 1 GB free",
+        )),
+        Some(b) => checks.push(ok(
+            "disk_free",
+            format!("{} free at {}", mb(b), probe_dir.display()),
+        )),
+        None => checks.push(warn(
+            "disk_free",
+            format!("cannot statvfs {}", probe_dir.display()),
+            "",
+        )),
     }
-    let mut rl = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    let mut rl = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
     if unsafe { libc::getrlimit(libc::RLIMIT_STACK, &mut rl) } == 0 {
-        let hard_ok = rl.rlim_max == libc::RLIM_INFINITY || rl.rlim_max as u64 >= process::STACK_BYTES;
+        let hard_ok = rl.rlim_max == libc::RLIM_INFINITY || rl.rlim_max >= process::STACK_BYTES;
         if hard_ok {
-            checks.push(ok("stack_limit", format!("hard limit {} (engine needs 64 MB; pgx raises the soft limit when it starts the engine)", if rl.rlim_max == libc::RLIM_INFINITY { "unlimited".to_string() } else { mb(rl.rlim_max as u64) })));
+            checks.push(ok("stack_limit", format!("hard limit {} (engine needs 64 MB; pgx raises the soft limit when it starts the engine)", if rl.rlim_max == libc::RLIM_INFINITY { "unlimited".to_string() } else { mb(rl.rlim_max) })));
         } else {
-            checks.push(fail("stack_limit", format!("hard stack limit {} is below 64 MB", mb(rl.rlim_max as u64)), "raise it (`ulimit -Hs 65520`, or /etc/security/limits.conf) before `pgx start`"));
+            checks.push(fail(
+                "stack_limit",
+                format!("hard stack limit {} is below 64 MB", mb(rl.rlim_max)),
+                "raise it (`ulimit -Hs 65520`, or /etc/security/limits.conf) before `pgx start`",
+            ));
         }
     }
     let fs_name = fsdetect::fs_type_name(&probe_dir);
     if fsdetect::supports_block_clone(&probe_dir) {
-        checks.push(ok("filesystem", format!("{fs_name} with block cloning: `pgx clone` shares blocks with the source")));
+        checks.push(ok(
+            "filesystem",
+            format!("{fs_name} with block cloning: `pgx clone` shares blocks with the source"),
+        ));
     } else {
-        checks.push(warn("filesystem", format!("{fs_name} without block cloning: `pgx clone` copies files"), "APFS, ZFS, btrfs or XFS with reflinks make clones copy-on-write"));
+        checks.push(warn(
+            "filesystem",
+            format!("{fs_name} without block cloning: `pgx clone` copies files"),
+            "APFS, ZFS, btrfs or XFS with reflinks make clones copy-on-write",
+        ));
     }
 
     // Libraries, orphan directories and log, when running.
     if let (Some(pid), Some(cfg)) = (running_pid, config.as_ref()) {
         let _ = pid;
-        match crate::pgwire::Client::connect_unix(&sock_dir, cfg.port, "postgres", "postgres", std::time::Duration::from_secs(10)) {
+        match crate::pgwire::Client::connect_unix(
+            &sock_dir,
+            cfg.port,
+            "postgres",
+            "postgres",
+            std::time::Duration::from_secs(10),
+        ) {
             Ok(mut client) => {
-                let status: serde_json::Value = client.simple_query("SELECT pgrust_runtime_status()").ok().and_then(|r| r.scalar().map(String::from)).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-                let known: Option<Vec<String>> = client.simple_query("SELECT oid::text FROM pg_database").ok().map(|r| r.rows.iter().filter_map(|row| row[0].clone()).collect());
-                let invalid: Vec<String> = client.simple_query("SELECT datname FROM pg_database WHERE datconnlimit = -2").map(|r| r.rows.iter().filter_map(|row| row[0].clone()).collect()).unwrap_or_default();
+                let status: serde_json::Value = client
+                    .simple_query("SELECT pgrust_runtime_status()")
+                    .ok()
+                    .and_then(|r| r.scalar().map(String::from))
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+                let known: Option<Vec<String>> = client
+                    .simple_query("SELECT oid::text FROM pg_database")
+                    .ok()
+                    .map(|r| r.rows.iter().filter_map(|row| row[0].clone()).collect());
+                let invalid: Vec<String> = client
+                    .simple_query("SELECT datname FROM pg_database WHERE datconnlimit = -2")
+                    .map(|r| r.rows.iter().filter_map(|row| row[0].clone()).collect())
+                    .unwrap_or_default();
                 client.close();
                 if let Some(known) = known {
                     checks.push(orphan_check(&home.data, &known));
                 }
                 if !invalid.is_empty() {
-                    checks.push(warn("invalid_databases", format!("{} database(s) marked invalid by an interrupted DROP DATABASE: {}", invalid.len(), invalid.join(", ")), "drop them again: `pgx drop <name> --force`"));
+                    checks.push(warn(
+                        "invalid_databases",
+                        format!(
+                            "{} database(s) marked invalid by an interrupted DROP DATABASE: {}",
+                            invalid.len(),
+                            invalid.join(", ")
+                        ),
+                        "drop them again: `pgx drop <name> --force`",
+                    ));
                 }
-                for (lib, feature, pkg) in [("libxml2", "the xml type and SQL/XML functions", "libxml2"), ("icu", "ICU collations", "libicu")] {
+                for (lib, feature, pkg) in [
+                    ("libxml2", "the xml type and SQL/XML functions", "libxml2"),
+                    ("icu", "ICU collations", "libicu"),
+                ] {
                     let l = &status["libraries"][lib];
                     let name: &'static str = if lib == "libxml2" { "libxml2" } else { "icu" };
                     if l["available"].as_bool() == Some(true) {
-                        let v = l.get("version").and_then(|v| v.as_str()).or_else(|| l.get("unicode_version").and_then(|v| v.as_str())).unwrap_or("");
+                        let v = l
+                            .get("version")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| l.get("unicode_version").and_then(|v| v.as_str()))
+                            .unwrap_or("");
                         checks.push(ok(name, format!("available {v}")));
                     } else {
-                        checks.push(warn(name, format!("not found: {feature} are unavailable ({})", l["error"].as_str().unwrap_or("not probed")), format!("install the {pkg} package")));
+                        checks.push(warn(
+                            name,
+                            format!(
+                                "not found: {feature} are unavailable ({})",
+                                l["error"].as_str().unwrap_or("not probed")
+                            ),
+                            format!("install the {pkg} package"),
+                        ));
                     }
                 }
             }
-            Err(e) => checks.push(fail("connect", format!("cannot connect to the running engine: {e}"), "see the log")),
+            Err(e) => checks.push(fail(
+                "connect",
+                format!("cannot connect to the running engine: {e}"),
+                "see the log",
+            )),
         }
     }
     if home.log_file.exists() {
         let tail = process::log_tail(&home, 200);
-        let bad: Vec<&str> = tail.lines().filter(|l| l.contains("PANIC") || l.contains("FATAL")).collect();
+        let bad: Vec<&str> = tail
+            .lines()
+            .filter(|l| l.contains("PANIC") || l.contains("FATAL"))
+            .collect();
         if bad.is_empty() {
-            checks.push(ok("log", format!("{} (no FATAL/PANIC in the last 200 lines)", home.log_file.display())));
+            checks.push(ok(
+                "log",
+                format!(
+                    "{} (no FATAL/PANIC in the last 200 lines)",
+                    home.log_file.display()
+                ),
+            ));
         } else {
-            checks.push(warn("log", format!("{} FATAL/PANIC line(s) in the last 200 lines of {}: {}", bad.len(), home.log_file.display(), bad.last().unwrap_or(&"")), "read the log"));
+            checks.push(warn(
+                "log",
+                format!(
+                    "{} FATAL/PANIC line(s) in the last 200 lines of {}: {}",
+                    bad.len(),
+                    home.log_file.display(),
+                    bad.last().unwrap_or(&"")
+                ),
+                "read the log",
+            ));
         }
     }
 
@@ -255,11 +496,19 @@ pub fn run(out: &Out) -> Result<ExitCode> {
             }
         }
     }
-    text.push_str(if any_fail { "\nproblems found" } else { "\nno problems found" });
+    text.push_str(if any_fail {
+        "\nproblems found"
+    } else {
+        "\nno problems found"
+    });
     let value = json!({
         "ok": !any_fail,
         "checks": checks.iter().map(|c| json!({"name": c.name, "status": c.status, "detail": c.detail, "hint": c.hint})).collect::<Vec<_>>(),
     });
     out.emit(&text, value);
-    Ok(if any_fail { ExitCode::Failure } else { ExitCode::Ok })
+    Ok(if any_fail {
+        ExitCode::Failure
+    } else {
+        ExitCode::Ok
+    })
 }

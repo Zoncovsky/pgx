@@ -45,10 +45,22 @@ impl Install {
 
     /// The prefix is the parent of the directory holding the (symlink-resolved) `pgx` binary.
     pub fn discover() -> Result<Install> {
-        let exe = std::env::current_exe().map_err(|e| PgxError::new(ExitCode::Corrupt, format!("cannot locate the pgx executable: {e}")))?;
+        let exe = std::env::current_exe().map_err(|e| {
+            PgxError::new(
+                ExitCode::Corrupt,
+                format!("cannot locate the pgx executable: {e}"),
+            )
+        })?;
         let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-        let bindir = exe.parent().ok_or_else(|| PgxError::new(ExitCode::Corrupt, "pgx executable has no parent directory"))?;
-        let prefix = bindir.parent().ok_or_else(|| PgxError::new(ExitCode::Corrupt, "pgx executable is not inside a <prefix>/bin directory"))?;
+        let bindir = exe.parent().ok_or_else(|| {
+            PgxError::new(ExitCode::Corrupt, "pgx executable has no parent directory")
+        })?;
+        let prefix = bindir.parent().ok_or_else(|| {
+            PgxError::new(
+                ExitCode::Corrupt,
+                "pgx executable is not inside a <prefix>/bin directory",
+            )
+        })?;
         Ok(Install::from_prefix(prefix))
     }
 
@@ -61,7 +73,11 @@ impl Install {
                 _ => p.is_file(),
             };
             if !ok {
-                out.push(Problem { what: rel.to_string(), detail: format!("missing {kind} {}", p.display()), fatal: true });
+                out.push(Problem {
+                    what: rel.to_string(),
+                    detail: format!("missing {kind} {}", p.display()),
+                    fatal: true,
+                });
             }
         };
         need("bin/postgres", "file");
@@ -83,14 +99,36 @@ impl Install {
             return Ok(());
         }
         let list: Vec<String> = problems.iter().map(|p| p.detail.clone()).collect();
-        Err(PgxError::new(ExitCode::Corrupt, format!("incomplete PGX installation at {}:\n  {}", self.prefix.display(), list.join("\n  ")))
-            .hint("reinstall PGX (curl -fsSL https://pgx.dev/install | sh) or run `pgx doctor`"))
+        Err(PgxError::new(
+            ExitCode::Corrupt,
+            format!(
+                "incomplete PGX installation at {}:\n  {}",
+                self.prefix.display(),
+                list.join("\n  ")
+            ),
+        )
+        .hint("reinstall PGX (curl -fsSL https://pgx.dev/install | sh) or run `pgx doctor`"))
     }
 
     pub fn dist_info(&self) -> Result<DistInfo> {
-        let text = std::fs::read_to_string(&self.dist_json).map_err(|e| PgxError::new(ExitCode::Corrupt, format!("cannot read {}: {e}", self.dist_json.display())))?;
-        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| PgxError::new(ExitCode::Corrupt, format!("{} is not valid JSON: {e}", self.dist_json.display())))?;
-        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("unknown").to_string();
+        let text = std::fs::read_to_string(&self.dist_json).map_err(|e| {
+            PgxError::new(
+                ExitCode::Corrupt,
+                format!("cannot read {}: {e}", self.dist_json.display()),
+            )
+        })?;
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            PgxError::new(
+                ExitCode::Corrupt,
+                format!("{} is not valid JSON: {e}", self.dist_json.display()),
+            )
+        })?;
+        let s = |k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown")
+                .to_string()
+        };
         Ok(DistInfo {
             pgx_version: s("pgx_version"),
             engine_commit: s("engine_commit"),
@@ -170,7 +208,10 @@ mod tests {
         let i = Install::from_prefix(Path::new("/opt/pgx dist"));
         assert_eq!(i.engine, Path::new("/opt/pgx dist/bin/postgres"));
         assert_eq!(i.share, Path::new("/opt/pgx dist/share"));
-        assert_eq!(i.base_cluster, Path::new("/opt/pgx dist/share/pgx/base-cluster"));
+        assert_eq!(
+            i.base_cluster,
+            Path::new("/opt/pgx dist/share/pgx/base-cluster")
+        );
         assert_eq!(i.dist_json, Path::new("/opt/pgx dist/share/pgx/dist.json"));
     }
 
@@ -187,7 +228,10 @@ mod tests {
         assert!(names.contains(&"share/timezonesets"), "{names:?}");
         assert!(names.contains(&"share/tsearch_data"), "{names:?}");
         assert!(names.contains(&"share/extension"), "{names:?}");
-        assert!(names.contains(&"share/pgx/base-cluster/PG_VERSION"), "{names:?}");
+        assert!(
+            names.contains(&"share/pgx/base-cluster/PG_VERSION"),
+            "{names:?}"
+        );
         assert!(names.contains(&"share/pgx/dist.json"), "{names:?}");
         assert!(!names.contains(&"bin/postgres"), "{names:?}");
         assert!(!names.contains(&"share/timezone"), "{names:?}");
@@ -199,7 +243,15 @@ mod tests {
     fn install_verify_clean_layout_has_no_problems() {
         let tmp = std::env::temp_dir().join(format!("pgx-layout-ok-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        for d in ["bin", "share/timezone", "share/timezonesets", "share/tsearch_data", "share/extension", "share/pgx/base-cluster/global", "share/pgx/base-cluster/base"] {
+        for d in [
+            "bin",
+            "share/timezone",
+            "share/timezonesets",
+            "share/tsearch_data",
+            "share/extension",
+            "share/pgx/base-cluster/global",
+            "share/pgx/base-cluster/base",
+        ] {
             std::fs::create_dir_all(tmp.join(d)).unwrap();
         }
         std::fs::write(tmp.join("bin/postgres"), b"").unwrap();

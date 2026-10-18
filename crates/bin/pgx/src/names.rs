@@ -26,7 +26,10 @@ impl std::fmt::Display for DbName {
 
 /// `^[A-Za-z_][A-Za-z0-9_-]{0,62}$`
 pub fn validate(name: &str) -> Result<DbName> {
-    let bad = |why: &str| PgxError::usage(format!("invalid database name {name:?}: {why}")).hint("use letters, digits, _ and - (first character a letter or _), at most 63 bytes");
+    let bad = |why: &str| {
+        PgxError::usage(format!("invalid database name {name:?}: {why}"))
+            .hint("use letters, digits, _ and - (first character a letter or _), at most 63 bytes")
+    };
     if name.is_empty() {
         return Err(bad("empty"));
     }
@@ -48,7 +51,9 @@ pub fn validate(name: &str) -> Result<DbName> {
 pub fn validate_user_target(name: &str) -> Result<DbName> {
     let n = validate(name)?;
     if RESERVED.contains(&n.as_str()) {
-        return Err(PgxError::usage(format!("{name:?} is a system database and cannot be created, dropped or overwritten")));
+        return Err(PgxError::usage(format!(
+            "{name:?} is a system database and cannot be created, dropped or overwritten"
+        )));
     }
     Ok(n)
 }
@@ -59,7 +64,14 @@ mod tests {
 
     #[test]
     fn accepts_identifier_like_names() {
-        for ok in ["myapp", "my_app_development", "My-App_2", "_x", "a".repeat(63).as_str(), "test_1"] {
+        for ok in [
+            "myapp",
+            "my_app_development",
+            "My-App_2",
+            "_x",
+            "a".repeat(63).as_str(),
+            "test_1",
+        ] {
             assert_eq!(validate(ok).unwrap().as_str(), ok);
         }
         assert_eq!(validate("My-App").unwrap().quoted(), "\"My-App\"");
@@ -67,7 +79,20 @@ mod tests {
 
     #[test]
     fn rejects_everything_else() {
-        for bad in ["", "1abc", "-a", "a b", "a;b", "a\"b", "a'b", "é", "x".repeat(64).as_str(), "a.b", "a/b", "a\0"] {
+        for bad in [
+            "",
+            "1abc",
+            "-a",
+            "a b",
+            "a;b",
+            "a\"b",
+            "a'b",
+            "é",
+            "x".repeat(64).as_str(),
+            "a.b",
+            "a/b",
+            "a\0",
+        ] {
             let e = validate(bad).unwrap_err();
             assert_eq!(e.code, crate::cli::ExitCode::Usage, "{bad:?}");
         }
@@ -77,7 +102,10 @@ mod tests {
     fn reserved_names_are_valid_but_not_targets() {
         for r in RESERVED {
             assert!(validate(r).is_ok());
-            assert_eq!(validate_user_target(r).unwrap_err().code, crate::cli::ExitCode::Usage);
+            assert_eq!(
+                validate_user_target(r).unwrap_err().code,
+                crate::cli::ExitCode::Usage
+            );
         }
         assert!(validate_user_target("postgres2").is_ok());
     }

@@ -6,10 +6,19 @@ use crate::out::Out;
 pub fn run(out: &Out) -> Result<ExitCode> {
     let install = Install::discover()?;
     let d = install.dist_info().unwrap_or_default();
-    let pgx_version = if d.pgx_version.is_empty() || d.pgx_version == "unknown" { env!("CARGO_PKG_VERSION").to_string() } else { d.pgx_version.clone() };
+    let pgx_version = if d.pgx_version.is_empty() || d.pgx_version == "unknown" {
+        env!("CARGO_PKG_VERSION").to_string()
+    } else {
+        d.pgx_version.clone()
+    };
     let text = format!(
         "pgx {pgx_version} (engine {}, PostgreSQL {} compatible, {}/{}, built {})\ninstall: {}",
-        d.engine_commit, d.postgres_compat, d.os, d.arch, d.built_at, install.prefix.display()
+        d.engine_commit,
+        d.postgres_compat,
+        d.os,
+        d.arch,
+        d.built_at,
+        install.prefix.display()
     );
     out.emit(
         &text,

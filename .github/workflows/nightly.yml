@@ -1,0 +1,51 @@
+name: Nightly
+on:
+  schedule: [{ cron: "0 7 * * *" }]
+  workflow_dispatch:
+# The heavy suites that are too slow for every PR: stress, repeated crash
+# recovery, the behavioural compatibility suite against a PostgreSQL 18
+# control, and the PostgreSQL regression baseline.
+jobs:
+  stress-and-compat:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL 18 and RE2
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo wget -qO /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-18 postgresql-client-18 libre2-dev pkg-config build-essential ruby ruby-dev
+          sudo gem install pg minitest --no-document
+          echo "PG18_BINDIR=/usr/lib/postgresql/18/bin" >> "$GITHUB_ENV"
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "1.96.0" }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --bin postgres --bin pgx
+      - name: Assemble
+        run: |
+          dist/assemble.sh --out "$RUNNER_TEMP/rel" --version "nightly-${{ github.sha }}" --pg-bindir "$PG18_BINDIR"
+          echo "PGX_DIST=$(find "$RUNNER_TEMP/rel" -maxdepth 1 -type d -name 'pgx-nightly-*')" >> "$GITHUB_ENV"
+      - name: Crash recovery (ephemeral + full)
+        run: |
+          PGX_TEST_DURABILITY=ephemeral python3 -I tests/pgx/test_crash.py
+          PGX_TEST_DURABILITY=full python3 -I tests/pgx/test_crash.py
+      - name: Isolation and concurrency
+        run: |
+          python3 -I tests/pgx/test_isolation.py
+          python3 -I tests/pgx/test_concurrency.py
+      - name: Storage (portable) and clone consistency
+        run: |
+          python3 -I tests/pgx/test_storage.py
+          python3 -I tests/pgx/clone_consistency.py
+      - name: Stress acceptance
+        run: python3 -I tests/pgx/stress.py --cycles 1000 --clients 100 --duration 60 --startstop 50
+      - name: Compatibility vs PostgreSQL 18 control
+        run: tests/compat/run.sh
+      - name: Regression baseline
+        run: |
+          python3 benchmarks/pgx/regress-baseline.py --out "$RUNNER_TEMP/regress" --binary target/release/postgres --conf configs/pgx-ephemeral.conf --max-connections 15 || true
+          python3 benchmarks/pgx/classify-regress-diffs.py "$RUNNER_TEMP/regress"
+      - name: Application fixtures
+        run: tests/apps/run_all.sh

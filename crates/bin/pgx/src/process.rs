@@ -29,8 +29,16 @@ pub fn read_pid_file(data: &Path) -> Option<PidFile> {
     let data_dir = PathBuf::from(lines.next()?.trim());
     let _start = lines.next();
     let port = lines.next().and_then(|l| l.trim().parse().ok());
-    let sock_dir = lines.next().map(|l| PathBuf::from(l.trim())).filter(|p| !p.as_os_str().is_empty());
-    Some(PidFile { pid, data_dir, port, sock_dir })
+    let sock_dir = lines
+        .next()
+        .map(|l| PathBuf::from(l.trim()))
+        .filter(|p| !p.as_os_str().is_empty());
+    Some(PidFile {
+        pid,
+        data_dir,
+        port,
+        sock_dir,
+    })
 }
 
 pub fn pid_alive(pid: u32) -> bool {
@@ -49,9 +57,16 @@ pub fn command_line(pid: u32) -> Option<String> {
             return Some(String::from_utf8_lossy(&raw).replace('\0', " "));
         }
     }
-    let out = Command::new("ps").args(["-o", "command=", "-p", &pid.to_string()]).output().ok()?;
+    let out = Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if out.status.success() && !s.is_empty() { Some(s) } else { None }
+    if out.status.success() && !s.is_empty() {
+        Some(s)
+    } else {
+        None
+    }
 }
 
 /// True when `pid` is alive and is an engine started on this data directory.
@@ -60,7 +75,10 @@ pub fn is_our_engine(pid: u32, data_dir: &Path) -> bool {
         return false;
     }
     match command_line(pid) {
-        Some(cmd) => cmd.contains(&data_dir.display().to_string()) && (cmd.contains("postgres") || cmd.contains("pgx")),
+        Some(cmd) => {
+            cmd.contains(&data_dir.display().to_string())
+                && (cmd.contains("postgres") || cmd.contains("pgx"))
+        }
         None => false,
     }
 }
@@ -68,8 +86,14 @@ pub fn is_our_engine(pid: u32, data_dir: &Path) -> bool {
 pub fn engine_env(install: &Install) -> Vec<(String, String)> {
     vec![
         ("RUST_MIN_STACK".into(), RUST_MIN_STACK.into()),
-        ("PGRUST_PGSHAREDIR".into(), install.share.display().to_string()),
-        ("PGRUST_TZDIR".into(), install.share.join("timezone").display().to_string()),
+        (
+            "PGRUST_PGSHAREDIR".into(),
+            install.share.display().to_string(),
+        ),
+        (
+            "PGRUST_TZDIR".into(),
+            install.share.join("timezone").display().to_string(),
+        ),
     ]
 }
 
@@ -89,23 +113,45 @@ pub fn engine_args(home: &Home, cfg: &Config, sock_dir: &Path) -> Vec<String> {
 }
 
 /// Starts the engine detached (own session, stdio to the log file).
-pub fn spawn(install: &Install, home: &Home, cfg: &Config, sock_dir: &Path, extra_args: &[&str]) -> Result<Child> {
+pub fn spawn(
+    install: &Install,
+    home: &Home,
+    cfg: &Config,
+    sock_dir: &Path,
+    extra_args: &[&str],
+) -> Result<Child> {
     use std::os::unix::process::CommandExt;
     if let Some(dir) = home.log_file.parent() {
         std::fs::create_dir_all(dir).map_err(|e| PgxError::io("cannot create", dir, &e))?;
     }
-    std::fs::create_dir_all(sock_dir).map_err(|e| PgxError::io("cannot create socket directory", sock_dir, &e))?;
-    let log = std::fs::OpenOptions::new().create(true).append(true).open(&home.log_file).map_err(|e| PgxError::io("cannot open log", &home.log_file, &e))?;
-    let log2 = log.try_clone().map_err(|e| PgxError::io("cannot dup log", &home.log_file, &e))?;
+    std::fs::create_dir_all(sock_dir)
+        .map_err(|e| PgxError::io("cannot create socket directory", sock_dir, &e))?;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&home.log_file)
+        .map_err(|e| PgxError::io("cannot open log", &home.log_file, &e))?;
+    let log2 = log
+        .try_clone()
+        .map_err(|e| PgxError::io("cannot dup log", &home.log_file, &e))?;
     let mut cmd = Command::new(&install.engine);
-    cmd.args(engine_args(home, cfg, sock_dir)).args(extra_args).envs(engine_env(install)).stdin(Stdio::null()).stdout(log).stderr(log2);
+    cmd.args(engine_args(home, cfg, sock_dir))
+        .args(extra_args)
+        .envs(engine_env(install))
+        .stdin(Stdio::null())
+        .stdout(log)
+        .stderr(log2);
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
-            let mut rl = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+            let mut rl = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
             if libc::getrlimit(libc::RLIMIT_STACK, &mut rl) == 0 {
                 let want = STACK_BYTES as libc::rlim_t;
-                if rl.rlim_cur < want && (rl.rlim_max == libc::RLIM_INFINITY || rl.rlim_max >= want) {
+                if rl.rlim_cur < want && (rl.rlim_max == libc::RLIM_INFINITY || rl.rlim_max >= want)
+                {
                     rl.rlim_cur = want;
                     libc::setrlimit(libc::RLIMIT_STACK, &rl);
                 }
@@ -113,7 +159,12 @@ pub fn spawn(install: &Install, home: &Home, cfg: &Config, sock_dir: &Path, extr
             Ok(())
         });
     }
-    cmd.spawn().map_err(|e| PgxError::failure(format!("cannot start the engine {}: {e}", install.engine.display())))
+    cmd.spawn().map_err(|e| {
+        PgxError::failure(format!(
+            "cannot start the engine {}: {e}",
+            install.engine.display()
+        ))
+    })
 }
 
 pub fn log_tail(home: &Home, n: usize) -> String {
@@ -126,16 +177,32 @@ pub fn log_tail(home: &Home, n: usize) -> String {
 }
 
 /// Connects repeatedly until the engine answers `SELECT 1`, the child exits, or the timeout passes.
-pub fn wait_ready(home: &Home, sock_dir: &Path, port: u16, child: Option<&mut Child>, timeout: Duration) -> Result<Client<UnixStream>> {
+pub fn wait_ready(
+    home: &Home,
+    sock_dir: &Path,
+    port: u16,
+    child: Option<&mut Child>,
+    timeout: Duration,
+) -> Result<Client<UnixStream>> {
     let start = Instant::now();
     let mut child = child;
     loop {
         if let Some(c) = child.as_deref_mut() {
             if let Ok(Some(status)) = c.try_wait() {
-                return Err(PgxError::failure(format!("the engine exited during startup ({status})\n--- {} (last lines)\n{}", home.log_file.display(), log_tail(home, 15))));
+                return Err(PgxError::failure(format!(
+                    "the engine exited during startup ({status})\n--- {} (last lines)\n{}",
+                    home.log_file.display(),
+                    log_tail(home, 15)
+                )));
             }
         }
-        match Client::connect_unix(sock_dir, port, "postgres", "postgres", Duration::from_secs(5)) {
+        match Client::connect_unix(
+            sock_dir,
+            port,
+            "postgres",
+            "postgres",
+            Duration::from_secs(5),
+        ) {
             Ok(mut client) => {
                 if client.simple_query("SELECT 1").is_ok() {
                     return Ok(client);
@@ -145,7 +212,12 @@ pub fn wait_ready(home: &Home, sock_dir: &Path, port: u16, child: Option<&mut Ch
             Err(_) => {}
         }
         if start.elapsed() > timeout {
-            return Err(PgxError::failure(format!("the engine did not become ready within {}s\n--- {} (last lines)\n{}", timeout.as_secs(), home.log_file.display(), log_tail(home, 15))));
+            return Err(PgxError::failure(format!(
+                "the engine did not become ready within {}s\n--- {} (last lines)\n{}",
+                timeout.as_secs(),
+                home.log_file.display(),
+                log_tail(home, 15)
+            )));
         }
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -165,7 +237,9 @@ fn signal(pid: u32, sig: i32) -> Result<()> {
         if e.raw_os_error() == Some(libc::ESRCH) {
             return Ok(());
         }
-        return Err(PgxError::failure(format!("cannot signal engine pid {pid}: {e}")));
+        return Err(PgxError::failure(format!(
+            "cannot signal engine pid {pid}: {e}"
+        )));
     }
     Ok(())
 }
@@ -189,19 +263,33 @@ fn wait_gone(pid: u32, child: Option<&mut Child>, timeout: Duration) -> bool {
 }
 
 /// Stops the engine. `child` (when we spawned it in this process) lets us reap it.
-pub fn stop(pid: u32, mode: StopMode, timeout: Duration, mut child: Option<&mut Child>) -> Result<()> {
+pub fn stop(
+    pid: u32,
+    mode: StopMode,
+    timeout: Duration,
+    mut child: Option<&mut Child>,
+) -> Result<()> {
     signal(pid, libc::SIGINT)?;
     if wait_gone(pid, child.as_deref_mut(), timeout) {
         return Ok(());
     }
     match mode {
-        StopMode::Fast => Err(PgxError::new(ExitCode::Failure, format!("the engine (pid {pid}) did not stop within {}s", timeout.as_secs())).hint("retry, or `pgx stop --force` to kill it")),
+        StopMode::Fast => Err(PgxError::new(
+            ExitCode::Failure,
+            format!(
+                "the engine (pid {pid}) did not stop within {}s",
+                timeout.as_secs()
+            ),
+        )
+        .hint("retry, or `pgx stop --force` to kill it")),
         StopMode::Force => {
             signal(pid, libc::SIGKILL)?;
             if wait_gone(pid, child, Duration::from_secs(10)) {
                 Ok(())
             } else {
-                Err(PgxError::failure(format!("the engine (pid {pid}) survived SIGKILL")))
+                Err(PgxError::failure(format!(
+                    "the engine (pid {pid}) survived SIGKILL"
+                )))
             }
         }
     }
@@ -237,9 +325,19 @@ mod tests {
     #[test]
     fn engine_args_name_data_socket_and_port() {
         let home = Home::at(PathBuf::from("/h/.pgx"));
-        let cfg = Config { port: 5455, password: "p".into(), durability: Default::default(), listen: vec![], run_dir: None, created_at: "t".into() };
+        let cfg = Config {
+            port: 5455,
+            password: "p".into(),
+            durability: Default::default(),
+            listen: vec![],
+            run_dir: None,
+            created_at: "t".into(),
+        };
         let a = engine_args(&home, &cfg, Path::new("/h/.pgx/run"));
-        assert_eq!(a[..6], ["-D", "/h/.pgx/data", "-k", "/h/.pgx/run", "-p", "5455"]);
+        assert_eq!(
+            a[..6],
+            ["-D", "/h/.pgx/data", "-k", "/h/.pgx/run", "-p", "5455"]
+        );
         assert!(a.contains(&"io_method=sync".to_string()));
     }
 }

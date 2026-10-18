@@ -14,15 +14,26 @@ pub fn run(out: &Out, force: bool) -> Result<ExitCode> {
             out.note("removing a stale postmaster.pid");
             let _ = std::fs::remove_file(&pid_file);
         }
-        out.emit("PGX is not running", serde_json::json!({"stopped": false, "was_running": false}));
+        out.emit(
+            "PGX is not running",
+            serde_json::json!({"stopped": false, "was_running": false}),
+        );
         return Ok(ExitCode::Ok);
     };
-    let mode = if force { process::StopMode::Force } else { process::StopMode::Fast };
+    let mode = if force {
+        process::StopMode::Force
+    } else {
+        process::StopMode::Fast
+    };
     process::stop(pid, mode, Duration::from_secs(60), None)?;
     if pid_file.exists() {
         // A killed engine cannot remove its own pid file.
-        std::fs::remove_file(&pid_file).map_err(|e| PgxError::io("cannot remove", &pid_file, &e))?;
+        std::fs::remove_file(&pid_file)
+            .map_err(|e| PgxError::io("cannot remove", &pid_file, &e))?;
     }
-    out.emit(&format!("stopped PGX (pid {pid})"), serde_json::json!({"stopped": true, "was_running": true, "pid": pid, "forced": force}));
+    out.emit(
+        &format!("stopped PGX (pid {pid})"),
+        serde_json::json!({"stopped": true, "was_running": true, "pid": pid, "forced": force}),
+    );
     Ok(ExitCode::Ok)
 }

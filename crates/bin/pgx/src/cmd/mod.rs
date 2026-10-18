@@ -25,27 +25,54 @@ impl Ctx {
         install.require_complete()?;
         let home = Home::resolve();
         let config = Config::load(&home.config_file)?;
-        Ok(Ctx { install, home, config })
+        Ok(Ctx {
+            install,
+            home,
+            config,
+        })
     }
 
     pub fn sock_dir(&self) -> PathBuf {
-        self.config.run_dir.clone().unwrap_or_else(|| self.home.run.clone())
+        self.config
+            .run_dir
+            .clone()
+            .unwrap_or_else(|| self.home.run.clone())
     }
 
     /// The pid of a running engine on this data directory, if any (stale pid files are ignored).
     pub fn running_pid(&self) -> Option<u32> {
         let pf = crate::process::read_pid_file(&self.home.data)?;
-        if crate::process::is_our_engine(pf.pid, &self.home.data) { Some(pf.pid) } else { None }
+        if crate::process::is_our_engine(pf.pid, &self.home.data) {
+            Some(pf.pid)
+        } else {
+            None
+        }
     }
 
     pub fn require_running(&self) -> Result<u32> {
-        self.running_pid().ok_or_else(|| PgxError::new(ExitCode::NotReady, "PGX is not running").hint("run `pgx start`"))
+        self.running_pid().ok_or_else(|| {
+            PgxError::new(ExitCode::NotReady, "PGX is not running").hint("run `pgx start`")
+        })
     }
 
-    pub fn connect(&self, database: &str) -> Result<crate::pgwire::Client<std::os::unix::net::UnixStream>> {
+    pub fn connect(
+        &self,
+        database: &str,
+    ) -> Result<crate::pgwire::Client<std::os::unix::net::UnixStream>> {
         self.require_running()?;
-        crate::pgwire::Client::connect_unix(&self.sock_dir(), self.config.port, "postgres", database, std::time::Duration::from_secs(30))
-            .map_err(|e| PgxError::failure(format!("cannot connect to the runtime on {}: {e}", crate::pgwire::Client::socket_path(&self.sock_dir(), self.config.port).display())))
+        crate::pgwire::Client::connect_unix(
+            &self.sock_dir(),
+            self.config.port,
+            "postgres",
+            database,
+            std::time::Duration::from_secs(30),
+        )
+        .map_err(|e| {
+            PgxError::failure(format!(
+                "cannot connect to the runtime on {}: {e}",
+                crate::pgwire::Client::socket_path(&self.sock_dir(), self.config.port).display()
+            ))
+        })
     }
 }
 

@@ -83,14 +83,26 @@ pub fn render_pgx_conf(cfg: &Config, sock_dir: &Path, block_clone: bool) -> Stri
     )
 }
 
-/// `pg_hba.conf`: trust on the Unix socket, scram-sha-256 on loopback TCP.
-pub fn render_hba() -> String {
-    "# pg_hba.conf — written by pgx init.\n\
-     # TYPE  DATABASE  USER  ADDRESS       METHOD\n\
-     local   all       all                 trust\n\
-     host    all       all   127.0.0.1/32  scram-sha-256\n\
-     host    all       all   ::1/128       scram-sha-256\n"
-        .to_string()
+/// `pg_hba.conf`: trust on the Unix socket, scram-sha-256 on loopback TCP, plus
+/// a scram-sha-256 line for each non-loopback listen address (so a container
+/// exposed with `-p` is reachable, still password-protected).
+pub fn render_hba(listen: &[String]) -> String {
+    let mut out = String::from(
+        "# pg_hba.conf — written by pgx init.\n         # TYPE  DATABASE  USER  ADDRESS       METHOD\n         local   all       all                 trust\n         host    all       all   127.0.0.1/32  scram-sha-256\n         host    all       all   ::1/128       scram-sha-256\n",
+    );
+    for a in listen {
+        match a.as_str() {
+            "127.0.0.1" | "::1" | "localhost" => {}
+            "0.0.0.0" | "*" => {
+                out.push_str("host    all       all   0.0.0.0/0     scram-sha-256\n")
+            }
+            "::" => out.push_str("host    all       all   ::/0          scram-sha-256\n"),
+            other => out.push_str(&format!(
+                "host    all       all   {other}/32  scram-sha-256\n"
+            )),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -98,7 +110,14 @@ mod tests {
     use super::*;
 
     fn cfg(d: Durability) -> Config {
-        Config { port: 5444, password: "p".into(), durability: d, listen: vec!["127.0.0.1".into(), "::1".into()], run_dir: None, created_at: "t".into() }
+        Config {
+            port: 5444,
+            password: "p".into(),
+            durability: d,
+            listen: vec!["127.0.0.1".into(), "::1".into()],
+            run_dir: None,
+            created_at: "t".into(),
+        }
     }
 
     #[test]
@@ -124,11 +143,22 @@ mod tests {
     }
 
     #[test]
-    fn hba_is_loopback_only() {
-        let h = render_hba();
+    fn hba_is_loopback_only_by_default() {
+        let h = render_hba(&["127.0.0.1".into(), "::1".into()]);
         assert!(h.contains("local   all       all                 trust"));
         assert!(h.contains("127.0.0.1/32  scram-sha-256"));
         assert!(h.contains("::1/128       scram-sha-256"));
         assert!(!h.contains("0.0.0.0"));
+    }
+
+    #[test]
+    fn hba_widens_for_non_loopback_listen() {
+        let h = render_hba(&["0.0.0.0".into()]);
+        assert!(h.contains("0.0.0.0/0     scram-sha-256"), "{h}");
+        assert!(h.contains("127.0.0.1/32"), "loopback still allowed: {h}");
+        assert!(
+            !h.contains("trust\nhost    all       all   0.0.0.0/0     trust"),
+            "never trust on a wide address"
+        );
     }
 }

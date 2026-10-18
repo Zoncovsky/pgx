@@ -42,16 +42,35 @@ pub struct Global {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    Init { port: Option<u16>, durability: Option<String>, force: bool },
+    Init {
+        port: Option<u16>,
+        durability: Option<String>,
+        force: bool,
+    },
     Start,
-    Stop { force: bool },
+    /// Run the engine in the foreground (init if needed); the Docker/systemd entrypoint.
+    Serve,
+    Stop {
+        force: bool,
+    },
     Restart,
     Status,
-    Create { name: String },
-    Drop { name: String, force: bool },
-    Clone { source: String, target: String },
+    Create {
+        name: String,
+    },
+    Drop {
+        name: String,
+        force: bool,
+    },
+    Clone {
+        source: String,
+        target: String,
+    },
     Ls,
-    Url { name: String, socket: bool },
+    Url {
+        name: String,
+        socket: bool,
+    },
     Doctor,
     Version,
     Help,
@@ -80,7 +99,10 @@ pub fn parse(args: &[String]) -> Result<(Global, Command)> {
             if let Some((k, v)) = flag.split_once('=') {
                 flags.push((k, Some(v)));
             } else if matches!(flag, "port" | "durability") {
-                let v = tail.get(i + 1).copied().ok_or_else(|| PgxError::usage(format!("--{flag} needs a value")))?;
+                let v = tail
+                    .get(i + 1)
+                    .copied()
+                    .ok_or_else(|| PgxError::usage(format!("--{flag} needs a value")))?;
                 flags.push((flag, Some(v)));
                 i += 1;
             } else {
@@ -111,28 +133,96 @@ pub fn parse(args: &[String]) -> Result<(Global, Command)> {
         "init" => {
             only_flags(&["port", "durability", "force"])?;
             arity(0, "init [--port N] [--durability ephemeral|full] [--force]")?;
-            let port = match value("port") {
-                None => None,
-                Some(p) => Some(
-                    p.parse::<u16>()
-                        .ok()
-                        .filter(|p| *p >= 1024)
-                        .ok_or_else(|| PgxError::usage(format!("--port must be a number between 1024 and 65535, got {p:?}")))?,
-                ),
-            };
-            Command::Init { port, durability: value("durability").map(String::from), force: has("force") }
+            let port =
+                match value("port") {
+                    None => None,
+                    Some(p) => Some(p.parse::<u16>().ok().filter(|p| *p >= 1024).ok_or_else(
+                        || {
+                            PgxError::usage(format!(
+                                "--port must be a number between 1024 and 65535, got {p:?}"
+                            ))
+                        },
+                    )?),
+                };
+            Command::Init {
+                port,
+                durability: value("durability").map(String::from),
+                force: has("force"),
+            }
         }
-        "start" => { only_flags(&[])?; arity(0, "start")?; Command::Start }
-        "stop" => { only_flags(&["force"])?; arity(0, "stop [--force]")?; Command::Stop { force: has("force") } }
-        "restart" => { only_flags(&[])?; arity(0, "restart")?; Command::Restart }
-        "status" => { only_flags(&[])?; arity(0, "status")?; Command::Status }
-        "create" => { only_flags(&[])?; arity(1, "create <database>")?; Command::Create { name: positional[0].into() } }
-        "drop" => { only_flags(&["force"])?; arity(1, "drop <database> [--force]")?; Command::Drop { name: positional[0].into(), force: has("force") } }
-        "clone" => { only_flags(&[])?; arity(2, "clone <source> <target>")?; Command::Clone { source: positional[0].into(), target: positional[1].into() } }
-        "ls" | "list" => { only_flags(&[])?; arity(0, "ls")?; Command::Ls }
-        "url" => { only_flags(&["socket"])?; arity(1, "url <database> [--socket]")?; Command::Url { name: positional[0].into(), socket: has("socket") } }
-        "doctor" => { only_flags(&[])?; arity(0, "doctor")?; Command::Doctor }
-        "version" => { only_flags(&[])?; arity(0, "version")?; Command::Version }
+        "start" => {
+            only_flags(&[])?;
+            arity(0, "start")?;
+            Command::Start
+        }
+        "serve" => {
+            only_flags(&[])?;
+            arity(0, "serve")?;
+            Command::Serve
+        }
+        "stop" => {
+            only_flags(&["force"])?;
+            arity(0, "stop [--force]")?;
+            Command::Stop {
+                force: has("force"),
+            }
+        }
+        "restart" => {
+            only_flags(&[])?;
+            arity(0, "restart")?;
+            Command::Restart
+        }
+        "status" => {
+            only_flags(&[])?;
+            arity(0, "status")?;
+            Command::Status
+        }
+        "create" => {
+            only_flags(&[])?;
+            arity(1, "create <database>")?;
+            Command::Create {
+                name: positional[0].into(),
+            }
+        }
+        "drop" => {
+            only_flags(&["force"])?;
+            arity(1, "drop <database> [--force]")?;
+            Command::Drop {
+                name: positional[0].into(),
+                force: has("force"),
+            }
+        }
+        "clone" => {
+            only_flags(&[])?;
+            arity(2, "clone <source> <target>")?;
+            Command::Clone {
+                source: positional[0].into(),
+                target: positional[1].into(),
+            }
+        }
+        "ls" | "list" => {
+            only_flags(&[])?;
+            arity(0, "ls")?;
+            Command::Ls
+        }
+        "url" => {
+            only_flags(&["socket"])?;
+            arity(1, "url <database> [--socket]")?;
+            Command::Url {
+                name: positional[0].into(),
+                socket: has("socket"),
+            }
+        }
+        "doctor" => {
+            only_flags(&[])?;
+            arity(0, "doctor")?;
+            Command::Doctor
+        }
+        "version" => {
+            only_flags(&[])?;
+            arity(0, "version")?;
+            Command::Version
+        }
         "help" => Command::Help,
         other => return Err(PgxError::usage(format!("unknown command {other:?}"))),
     };
@@ -149,6 +239,7 @@ Runtime
   pgx init [--port N] [--durability ephemeral|full] [--force]
                           create the cluster under $PGX_HOME (default ~/.pgx)
   pgx start               start the runtime (idempotent)
+  pgx serve               run the engine in the foreground (init if needed; for Docker/systemd)
   pgx stop [--force]      stop it (fast shutdown; --force kills after the timeout)
   pgx restart
   pgx status              running?, pid, port, databases, memory
@@ -212,15 +303,68 @@ mod tests {
 
     #[test]
     fn parse_subcommands_with_arguments() {
-        assert_eq!(parse(&args("create myapp")).unwrap().1, Command::Create { name: "myapp".into() });
-        assert_eq!(parse(&args("drop myapp --force")).unwrap().1, Command::Drop { name: "myapp".into(), force: true });
-        assert_eq!(parse(&args("drop myapp")).unwrap().1, Command::Drop { name: "myapp".into(), force: false });
-        assert_eq!(parse(&args("clone tpl t1")).unwrap().1, Command::Clone { source: "tpl".into(), target: "t1".into() });
-        assert_eq!(parse(&args("url myapp")).unwrap().1, Command::Url { name: "myapp".into(), socket: false });
-        assert_eq!(parse(&args("url myapp --socket")).unwrap().1, Command::Url { name: "myapp".into(), socket: true });
-        assert_eq!(parse(&args("init --port 5555")).unwrap().1, Command::Init { port: Some(5555), durability: None, force: false });
-        assert_eq!(parse(&args("init --durability full --force")).unwrap().1, Command::Init { port: None, durability: Some("full".into()), force: true });
-        assert_eq!(parse(&args("stop --force")).unwrap().1, Command::Stop { force: true });
+        assert_eq!(
+            parse(&args("create myapp")).unwrap().1,
+            Command::Create {
+                name: "myapp".into()
+            }
+        );
+        assert_eq!(
+            parse(&args("drop myapp --force")).unwrap().1,
+            Command::Drop {
+                name: "myapp".into(),
+                force: true
+            }
+        );
+        assert_eq!(
+            parse(&args("drop myapp")).unwrap().1,
+            Command::Drop {
+                name: "myapp".into(),
+                force: false
+            }
+        );
+        assert_eq!(
+            parse(&args("clone tpl t1")).unwrap().1,
+            Command::Clone {
+                source: "tpl".into(),
+                target: "t1".into()
+            }
+        );
+        assert_eq!(
+            parse(&args("url myapp")).unwrap().1,
+            Command::Url {
+                name: "myapp".into(),
+                socket: false
+            }
+        );
+        assert_eq!(
+            parse(&args("url myapp --socket")).unwrap().1,
+            Command::Url {
+                name: "myapp".into(),
+                socket: true
+            }
+        );
+        assert_eq!(
+            parse(&args("init --port 5555")).unwrap().1,
+            Command::Init {
+                port: Some(5555),
+                durability: None,
+                force: false
+            }
+        );
+        assert_eq!(
+            parse(&args("init --durability full --force")).unwrap().1,
+            Command::Init {
+                port: None,
+                durability: Some("full".into()),
+                force: true
+            }
+        );
+        assert_eq!(
+            parse(&args("stop --force")).unwrap().1,
+            Command::Stop { force: true }
+        );
+        assert_eq!(parse(&args("serve")).unwrap().1, Command::Serve);
         assert_eq!(parse(&args("ls")).unwrap().1, Command::Ls);
         assert_eq!(parse(&args("doctor")).unwrap().1, Command::Doctor);
         assert_eq!(parse(&args("version")).unwrap().1, Command::Version);
@@ -240,18 +384,36 @@ mod tests {
     #[test]
     fn missing_and_extra_arguments_are_usage_errors() {
         assert_eq!(parse(&args("create")).unwrap_err().code, ExitCode::Usage);
-        assert_eq!(parse(&args("create a b")).unwrap_err().code, ExitCode::Usage);
+        assert_eq!(
+            parse(&args("create a b")).unwrap_err().code,
+            ExitCode::Usage
+        );
         assert_eq!(parse(&args("clone a")).unwrap_err().code, ExitCode::Usage);
-        assert_eq!(parse(&args("init --port notanumber")).unwrap_err().code, ExitCode::Usage);
-        assert_eq!(parse(&args("init --port 70000")).unwrap_err().code, ExitCode::Usage);
-        assert_eq!(parse(&args("status --bogus")).unwrap_err().code, ExitCode::Usage);
+        assert_eq!(
+            parse(&args("init --port notanumber")).unwrap_err().code,
+            ExitCode::Usage
+        );
+        assert_eq!(
+            parse(&args("init --port 70000")).unwrap_err().code,
+            ExitCode::Usage
+        );
+        assert_eq!(
+            parse(&args("status --bogus")).unwrap_err().code,
+            ExitCode::Usage
+        );
     }
 
     #[test]
     fn help_mentions_every_command() {
         let h = help_text();
-        for c in ["init", "start", "stop", "restart", "status", "create", "drop", "clone", "ls", "url", "doctor", "version", "help"] {
-            assert!(h.contains(&format!("pgx {c}")) || h.contains(&format!("  {c}")), "help lacks {c}");
+        for c in [
+            "init", "start", "stop", "restart", "status", "create", "drop", "clone", "ls", "url",
+            "doctor", "version", "help",
+        ] {
+            assert!(
+                h.contains(&format!("pgx {c}")) || h.contains(&format!("  {c}")),
+                "help lacks {c}"
+            );
         }
         assert!(h.contains("--json"));
         assert!(h.contains("Exit codes"));

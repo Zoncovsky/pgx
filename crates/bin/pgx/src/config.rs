@@ -18,7 +18,9 @@ impl Durability {
         match s {
             "ephemeral" => Ok(Durability::Ephemeral),
             "full" => Ok(Durability::Full),
-            other => Err(PgxError::usage(format!("--durability must be `ephemeral` or `full`, got {other:?}"))),
+            other => Err(PgxError::usage(format!(
+                "--durability must be `ephemeral` or `full`, got {other:?}"
+            ))),
         }
     }
     pub fn as_str(self) -> &'static str {
@@ -54,25 +56,57 @@ impl Config {
     }
 
     pub fn from_json(text: &str) -> Result<Config> {
-        let bad = |m: String| PgxError::new(ExitCode::Corrupt, format!("config.json: {m}")).hint("re-run `pgx init --force` to recreate it (this deletes the data directory)");
+        let bad = |m: String| {
+            PgxError::new(ExitCode::Corrupt, format!("config.json: {m}"))
+                .hint("re-run `pgx init --force` to recreate it (this deletes the data directory)")
+        };
         let v: serde_json::Value = serde_json::from_str(text).map_err(|e| bad(e.to_string()))?;
-        let port = v.get("port").and_then(|p| p.as_u64()).filter(|p| (1..=65535).contains(p)).ok_or_else(|| bad("port missing or invalid".into()))? as u16;
-        let password = v.get("password").and_then(|p| p.as_str()).ok_or_else(|| bad("password missing".into()))?.to_string();
-        let durability = Durability::parse(v.get("durability").and_then(|d| d.as_str()).unwrap_or("ephemeral")).map_err(|e| bad(e.message))?;
+        let port = v
+            .get("port")
+            .and_then(|p| p.as_u64())
+            .filter(|p| (1..=65535).contains(p))
+            .ok_or_else(|| bad("port missing or invalid".into()))? as u16;
+        let password = v
+            .get("password")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| bad("password missing".into()))?
+            .to_string();
+        let durability = Durability::parse(
+            v.get("durability")
+                .and_then(|d| d.as_str())
+                .unwrap_or("ephemeral"),
+        )
+        .map_err(|e| bad(e.message))?;
         let listen = v
             .get("listen")
             .and_then(|l| l.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_else(|| vec!["127.0.0.1".to_string(), "::1".to_string()]);
         let run_dir = v.get("run_dir").and_then(|r| r.as_str()).map(PathBuf::from);
-        let created_at = v.get("created_at").and_then(|c| c.as_str()).unwrap_or("").to_string();
-        Ok(Config { port, password, durability, listen, run_dir, created_at })
+        let created_at = v
+            .get("created_at")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+        Ok(Config {
+            port,
+            password,
+            durability,
+            listen,
+            run_dir,
+            created_at,
+        })
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
         use std::io::Write;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| PgxError::io("cannot create", parent, &e))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| PgxError::io("cannot create", parent, &e))?;
         }
         let tmp = path.with_extension("json.tmp");
         {
@@ -83,14 +117,18 @@ impl Config {
                 use std::os::unix::fs::OpenOptionsExt;
                 opts.mode(0o600);
             }
-            let mut f = opts.open(&tmp).map_err(|e| PgxError::io("cannot write", &tmp, &e))?;
-            f.write_all(self.to_json().as_bytes()).map_err(|e| PgxError::io("cannot write", &tmp, &e))?;
+            let mut f = opts
+                .open(&tmp)
+                .map_err(|e| PgxError::io("cannot write", &tmp, &e))?;
+            f.write_all(self.to_json().as_bytes())
+                .map_err(|e| PgxError::io("cannot write", &tmp, &e))?;
             f.sync_all().ok();
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).map_err(|e| PgxError::io("cannot chmod", &tmp, &e))?;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| PgxError::io("cannot chmod", &tmp, &e))?;
         }
         std::fs::rename(&tmp, path).map_err(|e| PgxError::io("cannot rename into place", path, &e))
     }
@@ -98,7 +136,11 @@ impl Config {
     pub fn load(path: &Path) -> Result<Config> {
         let text = std::fs::read_to_string(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                PgxError::new(ExitCode::NotReady, format!("PGX is not initialised ({} is missing)", path.display())).hint("run `pgx init`")
+                PgxError::new(
+                    ExitCode::NotReady,
+                    format!("PGX is not initialised ({} is missing)", path.display()),
+                )
+                .hint("run `pgx init`")
             } else {
                 PgxError::io("cannot read", path, &e)
             }
@@ -124,12 +166,18 @@ mod tests {
         let json = c.to_json();
         let back = Config::from_json(&json).unwrap();
         assert_eq!(back, c);
-        assert_eq!(Config::from_json(&json).unwrap().durability, Durability::Full);
+        assert_eq!(
+            Config::from_json(&json).unwrap().durability,
+            Durability::Full
+        );
     }
 
     #[test]
     fn durability_names() {
-        assert_eq!(Durability::parse("ephemeral").unwrap(), Durability::Ephemeral);
+        assert_eq!(
+            Durability::parse("ephemeral").unwrap(),
+            Durability::Ephemeral
+        );
         assert_eq!(Durability::parse("full").unwrap(), Durability::Full);
         assert!(Durability::parse("sorta").is_err());
         assert_eq!(Durability::Ephemeral.as_str(), "ephemeral");
@@ -150,7 +198,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.json");
-        let c = Config { port: 5432, password: "p".into(), durability: Durability::Ephemeral, listen: vec!["127.0.0.1".into()], run_dir: Some(dir.clone()), created_at: "t".into() };
+        let c = Config {
+            port: 5432,
+            password: "p".into(),
+            durability: Durability::Ephemeral,
+            listen: vec!["127.0.0.1".into()],
+            run_dir: Some(dir.clone()),
+            created_at: "t".into(),
+        };
         c.save(&path).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "mode {mode:o}");

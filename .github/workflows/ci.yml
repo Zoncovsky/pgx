@@ -1,0 +1,69 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main, pgx-local-dev]
+# PR gate: fast correctness checks for the pgx CLI, the assembled distribution,
+# the black-box SQL/clone/doctor suites, the installer, and the Docker image.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  cli:
+    name: fmt, clippy, unit + black-box (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL 18 and RE2 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo wget -qO /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-18 postgresql-client-18 libre2-dev pkg-config build-essential
+          echo "PG18_BINDIR=/usr/lib/postgresql/18/bin" >> "$GITHUB_ENV"
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - name: Install PostgreSQL 18 and RE2 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install postgresql@18 re2 pkg-config
+          echo "PG18_BINDIR=$(brew --prefix postgresql@18)/bin" >> "$GITHUB_ENV"
+          echo "$(brew --prefix postgresql@18)/bin" >> "$GITHUB_PATH"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96.0"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format and clippy (pgx crate)
+        run: |
+          cargo fmt -p pgx -- --check
+          cargo clippy -p pgx --all-targets -- -D warnings
+      - name: Build engine and CLI
+        run: cargo build --release --locked --bin postgres --bin pgx
+      - name: Assemble distribution
+        run: dist/assemble.sh --out "$RUNNER_TEMP/rel" --version "ci-${{ github.sha }}" --pg-bindir "$PG18_BINDIR"
+      - name: Unit tests
+        run: cargo test -p pgx --release
+        env: { PGX_DIST: "" }
+      - name: Export PGX_DIST
+        run: echo "PGX_DIST=$(find "$RUNNER_TEMP/rel" -maxdepth 1 -type d -name 'pgx-ci-*')" >> "$GITHUB_ENV"
+      - name: Black-box suites
+        run: |
+          python3 -I tests/pgx/test_sql.py
+          cargo test -p pgx --release --test lifecycle --test databases --test clone --test doctor
+      - name: Installer end-to-end
+        run: dist/test/install_test.sh
+  docker:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test the image
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client-16 || true
+          dist/test/docker_test.sh

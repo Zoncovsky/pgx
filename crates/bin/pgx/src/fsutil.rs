@@ -6,19 +6,26 @@ use std::path::Path;
 pub fn copy_tree_private(src: &Path, dst: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir(dst).map_err(|e| PgxError::io("cannot create", dst, &e))?;
-    std::fs::set_permissions(dst, std::fs::Permissions::from_mode(0o700)).map_err(|e| PgxError::io("cannot chmod", dst, &e))?;
+    std::fs::set_permissions(dst, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| PgxError::io("cannot chmod", dst, &e))?;
     for entry in std::fs::read_dir(src).map_err(|e| PgxError::io("cannot read", src, &e))? {
         let entry = entry.map_err(|e| PgxError::io("cannot read entry in", src, &e))?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        let ft = entry.file_type().map_err(|e| PgxError::io("cannot stat", &from, &e))?;
+        let ft = entry
+            .file_type()
+            .map_err(|e| PgxError::io("cannot stat", &from, &e))?;
         if ft.is_dir() {
             copy_tree_private(&from, &to)?;
         } else if ft.is_file() {
             std::fs::copy(&from, &to).map_err(|e| PgxError::io("cannot copy", &from, &e))?;
-            std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o600)).map_err(|e| PgxError::io("cannot chmod", &to, &e))?;
+            std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| PgxError::io("cannot chmod", &to, &e))?;
         } else {
-            return Err(PgxError::failure(format!("unexpected non-regular file in the base cluster: {}", from.display())));
+            return Err(PgxError::failure(format!(
+                "unexpected non-regular file in the base cluster: {}",
+                from.display()
+            )));
         }
     }
     Ok(())
@@ -28,11 +35,13 @@ pub fn copy_tree_private(src: &Path, dst: &Path) -> Result<()> {
 pub fn random_password() -> Result<String> {
     use std::io::Read;
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let mut f = std::fs::File::open("/dev/urandom").map_err(|e| PgxError::failure(format!("cannot open /dev/urandom: {e}")))?;
+    let mut f = std::fs::File::open("/dev/urandom")
+        .map_err(|e| PgxError::failure(format!("cannot open /dev/urandom: {e}")))?;
     let mut out = String::with_capacity(32);
     let mut buf = [0u8; 64];
     while out.len() < 32 {
-        f.read_exact(&mut buf).map_err(|e| PgxError::failure(format!("cannot read /dev/urandom: {e}")))?;
+        f.read_exact(&mut buf)
+            .map_err(|e| PgxError::failure(format!("cannot read /dev/urandom: {e}")))?;
         for b in buf {
             // rejection sampling keeps the distribution uniform
             if (b as usize) < 62 * 4 {
@@ -47,7 +56,10 @@ pub fn random_password() -> Result<String> {
 }
 
 pub fn now_rfc3339() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     // civil-from-days (Howard Hinnant), UTC
     let days = (secs / 86400) as i64;
     let rem = secs % 86400;
@@ -61,7 +73,12 @@ pub fn now_rfc3339() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, (rem % 3600) / 60, rem % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
 }
 
 #[cfg(test)]
@@ -94,9 +111,26 @@ mod tests {
         std::fs::write(base.join("src/sub/b"), b"bb").unwrap();
         copy_tree_private(&base.join("src"), &base.join("dst")).unwrap();
         assert_eq!(std::fs::read(base.join("dst/sub/b")).unwrap(), b"bb");
-        assert_eq!(std::fs::metadata(base.join("dst")).unwrap().permissions().mode() & 0o777, 0o700);
-        assert_eq!(std::fs::metadata(base.join("dst/a")).unwrap().permissions().mode() & 0o777, 0o600);
-        assert!(copy_tree_private(&base.join("src"), &base.join("dst")).is_err(), "existing destination must be refused");
+        assert_eq!(
+            std::fs::metadata(base.join("dst"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(base.join("dst/a"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert!(
+            copy_tree_private(&base.join("src"), &base.join("dst")).is_err(),
+            "existing destination must be refused"
+        );
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

@@ -24,24 +24,45 @@ fn init_creates_cluster_and_config() {
     assert!(p.home.join("data/PG_VERSION").is_file());
     assert!(p.home.join("data/pgx.conf").is_file());
     assert!(p.home.join("data/pg_hba.conf").is_file());
-    let mode = std::fs::metadata(p.home.join("data")).unwrap().permissions().mode() & 0o777;
+    let mode = std::fs::metadata(p.home.join("data"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
     assert_eq!(mode, 0o700, "data dir mode {mode:o}");
-    let mode = std::fs::metadata(p.home.join("config.json")).unwrap().permissions().mode() & 0o777;
+    let mode = std::fs::metadata(p.home.join("config.json"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
     assert_eq!(mode, 0o600, "config mode {mode:o}");
     let c = p.config();
     assert_eq!(c["port"], p.port);
     assert_eq!(c["durability"], "ephemeral");
     assert!(c["password"].as_str().unwrap().len() >= 24);
     assert!(p.engine_pids().is_empty(), "init left an engine running");
-    assert!(!p.home.join("data/postmaster.pid").exists(), "init left postmaster.pid");
+    assert!(
+        !p.home.join("data/postmaster.pid").exists(),
+        "init left postmaster.pid"
+    );
     let conf = std::fs::read_to_string(p.home.join("data/pgx.conf")).unwrap();
     assert!(conf.contains(&format!("port = {}", p.port)));
-    assert!(conf.contains("listen_addresses = '127.0.0.1, ::1'"), "{conf}");
-    assert!(conf.contains("fsync = off"), "ephemeral profile expected: {conf}");
+    assert!(
+        conf.contains("listen_addresses = '127.0.0.1, ::1'"),
+        "{conf}"
+    );
+    assert!(
+        conf.contains("fsync = off"),
+        "ephemeral profile expected: {conf}"
+    );
     let hba = std::fs::read_to_string(p.home.join("data/pg_hba.conf")).unwrap();
     assert!(hba.contains("scram-sha-256"), "{hba}");
     assert!(!hba.contains("0.0.0.0/0"), "{hba}");
-    assert!(r.stdout.contains("pgx start"), "init should tell the user what to do next: {}", r.stdout);
+    assert!(
+        r.stdout.contains("pgx start"),
+        "init should tell the user what to do next: {}",
+        r.stdout
+    );
 }
 
 #[test]
@@ -51,7 +72,10 @@ fn init_json_output() {
     let j = p.run(&["--json", "init", "--port", &port]).json();
     assert_eq!(j["port"], p.port);
     assert_eq!(j["durability"], "ephemeral");
-    assert_eq!(j["data_dir"], p.home.join("data").to_string_lossy().as_ref());
+    assert_eq!(
+        j["data_dir"],
+        p.home.join("data").to_string_lossy().as_ref()
+    );
 }
 
 #[test]
@@ -75,8 +99,14 @@ fn init_twice_is_conflict_and_keeps_data() {
     let r = p.init();
     assert_eq!(r.code, 4, "{}", r.all());
     assert!(r.stderr.contains("already"), "{}", r.stderr);
-    assert_eq!(std::fs::read_to_string(p.home.join("config.json")).unwrap(), before, "second init changed config");
-    let j = p.run(&["--json", "init", "--port", &p.port.to_string()]).json();
+    assert_eq!(
+        std::fs::read_to_string(p.home.join("config.json")).unwrap(),
+        before,
+        "second init changed config"
+    );
+    let j = p
+        .run(&["--json", "init", "--port", &p.port.to_string()])
+        .json();
     assert_eq!(j["error"]["exit_code"], 4);
 }
 
@@ -88,7 +118,10 @@ fn init_force_recreates() {
     let port = p.port.to_string();
     let r = p.run(&["init", "--port", &port, "--force"]);
     assert_eq!(r.code, 0, "{}", r.all());
-    assert!(!p.home.join("data/marker").exists(), "--force did not recreate the data dir");
+    assert!(
+        !p.home.join("data/marker").exists(),
+        "--force did not recreate the data dir"
+    );
 }
 
 #[test]
@@ -97,8 +130,15 @@ fn init_refuses_long_socket_path() {
     let p = Pgx::with_home(long);
     let r = p.init();
     assert_eq!(r.code, 2, "{}", r.all());
-    assert!(r.stderr.contains("socket") && r.stderr.contains("PGX_RUN_DIR"), "{}", r.stderr);
-    assert!(!p.home.join("data").exists(), "refused init must not leave a data dir");
+    assert!(
+        r.stderr.contains("socket") && r.stderr.contains("PGX_RUN_DIR"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        !p.home.join("data").exists(),
+        "refused init must not leave a data dir"
+    );
 }
 
 #[test]
@@ -107,7 +147,11 @@ fn init_with_run_dir_override_accepts_long_home() {
     let p = Pgx::with_home(long);
     let run_dir = common::scratch_root().join(format!("rd{}", p.port));
     let port = p.port.to_string();
-    let r = p.cmd(&["init", "--port", &port]).env("PGX_RUN_DIR", &run_dir).output().unwrap();
+    let r = p
+        .cmd(&["init", "--port", &port])
+        .env("PGX_RUN_DIR", &run_dir)
+        .output()
+        .unwrap();
     let r = common::Run::from(r);
     assert_eq!(r.code, 0, "{}", r.all());
     assert_eq!(p.config()["run_dir"], run_dir.to_string_lossy().as_ref());
@@ -163,7 +207,11 @@ fn start_stop_roundtrip_select_1() {
     p.init_ok();
     let r = p.run(&["start"]);
     assert_eq!(r.code, 0, "{}\n{}", r.all(), p.log_tail());
-    assert!(r.stdout.contains(&format!("port {}", p.port)) || r.stdout.contains(&p.port.to_string()), "{}", r.stdout);
+    assert!(
+        r.stdout.contains(&format!("port {}", p.port)) || r.stdout.contains(&p.port.to_string()),
+        "{}",
+        r.stdout
+    );
     let pids = p.engine_pids();
     assert_eq!(pids.len(), 1, "expected one engine, got {pids:?}");
     let q = p.psql("postgres", "SELECT 1");
@@ -177,7 +225,10 @@ fn start_stop_roundtrip_select_1() {
     let r = p.run(&["stop"]);
     assert_eq!(r.code, 0, "{}", r.all());
     assert!(p.engine_pids().is_empty(), "stop left an engine");
-    assert!(!p.home.join("data/postmaster.pid").exists(), "stop left postmaster.pid");
+    assert!(
+        !p.home.join("data/postmaster.pid").exists(),
+        "stop left postmaster.pid"
+    );
 }
 
 #[test]
@@ -232,20 +283,49 @@ fn stale_pid_reused_by_other_process() {
     p.init_ok();
     // A pid that is alive but is not our engine: this test process.
     let me = std::process::id();
-    std::fs::write(p.home.join("data/postmaster.pid"), format!("{me}\n{}\n1\n{}\n{}\n\n  0 0\nready\n", p.home.join("data").display(), p.port, p.sock_dir().display())).unwrap();
+    std::fs::write(
+        p.home.join("data/postmaster.pid"),
+        format!(
+            "{me}\n{}\n1\n{}\n{}\n\n  0 0\nready\n",
+            p.home.join("data").display(),
+            p.port,
+            p.sock_dir().display()
+        ),
+    )
+    .unwrap();
     let j = p.run(&["--json", "status"]).json();
-    assert_eq!(j["running"], false, "a foreign pid must not count as running: {j}");
+    assert_eq!(
+        j["running"], false,
+        "a foreign pid must not count as running: {j}"
+    );
     let r = p.run(&["start"]);
-    assert_eq!(r.code, 0, "start must clear the stale pid file: {}\n{}", r.all(), p.log_tail());
+    assert_eq!(
+        r.code,
+        0,
+        "start must clear the stale pid file: {}\n{}",
+        r.all(),
+        p.log_tail()
+    );
     assert_eq!(p.engine_pids().len(), 1);
-    assert!(std::fs::read_to_string(p.home.join("data/postmaster.pid")).unwrap().starts_with(&p.engine_pids()[0].to_string()));
+    assert!(std::fs::read_to_string(p.home.join("data/postmaster.pid"))
+        .unwrap()
+        .starts_with(&p.engine_pids()[0].to_string()));
 }
 
 #[test]
 fn stale_pid_of_dead_process_is_cleared() {
     let p = Pgx::new();
     p.init_ok();
-    std::fs::write(p.home.join("data/postmaster.pid"), format!("999999\n{}\n1\n{}\n{}\n\n  0 0\nready\n", p.home.join("data").display(), p.port, p.sock_dir().display())).unwrap();
+    std::fs::write(
+        p.home.join("data/postmaster.pid"),
+        format!(
+            "999999\n{}\n1\n{}\n{}\n\n  0 0\nready\n",
+            p.home.join("data").display(),
+            p.port,
+            p.sock_dir().display()
+        ),
+    )
+    .unwrap();
     let r = p.run(&["start"]);
     assert_eq!(r.code, 0, "{}\n{}", r.all(), p.log_tail());
 }
@@ -259,7 +339,10 @@ fn port_conflict_is_exit_4() {
     drop(busy);
     assert_eq!(r.code, 4, "{}", r.all());
     assert!(r.stderr.contains("in use"), "{}", r.stderr);
-    assert!(p.engine_pids().is_empty(), "a failed start must leave no engine");
+    assert!(
+        p.engine_pids().is_empty(),
+        "a failed start must leave no engine"
+    );
     assert!(!p.home.join("data/postmaster.pid").exists());
 }
 
@@ -277,8 +360,20 @@ fn concurrent_start_single_server() {
     for r in &runs {
         assert_eq!(r.code, 0, "{}", r.all());
     }
-    assert_eq!(p.engine_pids().len(), 1, "concurrent starts produced {} engines", p.engine_pids().len());
-    assert!(runs.iter().filter(|r| r.stdout.contains("already running")).count() >= 1, "no start reported the other: {:?}", runs.iter().map(|r| r.stdout.clone()).collect::<Vec<_>>());
+    assert_eq!(
+        p.engine_pids().len(),
+        1,
+        "concurrent starts produced {} engines",
+        p.engine_pids().len()
+    );
+    assert!(
+        runs.iter()
+            .filter(|r| r.stdout.contains("already running"))
+            .count()
+            >= 1,
+        "no start reported the other: {:?}",
+        runs.iter().map(|r| r.stdout.clone()).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -286,7 +381,14 @@ fn restart_preserves_data() {
     let p = Pgx::new();
     p.init_ok();
     p.start_ok();
-    assert_eq!(p.psql("postgres", "CREATE TABLE keep(v text); INSERT INTO keep VALUES ('survives')").code, 0);
+    assert_eq!(
+        p.psql(
+            "postgres",
+            "CREATE TABLE keep(v text); INSERT INTO keep VALUES ('survives')"
+        )
+        .code,
+        0
+    );
     let r = p.run(&["restart"]);
     assert_eq!(r.code, 0, "{}\n{}", r.all(), p.log_tail());
     let q = p.psql("postgres", "SELECT v FROM keep");
@@ -294,7 +396,12 @@ fn restart_preserves_data() {
     p.stop_ok();
     p.start_ok();
     let q = p.psql("postgres", "SELECT v FROM keep");
-    assert_eq!(q.stdout.trim(), "survives", "data lost across stop/start: {}", q.all());
+    assert_eq!(
+        q.stdout.trim(),
+        "survives",
+        "data lost across stop/start: {}",
+        q.all()
+    );
 }
 
 #[test]
@@ -317,5 +424,75 @@ fn start_survives_cli_parent_exit_and_terminal_hangup() {
     p.start_ok();
     let pid = p.engine_pids()[0];
     let sid = unsafe { libc::getsid(pid as i32) };
-    assert_eq!(sid, pid as i32, "engine should lead its own session (sid {sid}, pid {pid})");
+    assert_eq!(
+        sid, pid as i32,
+        "engine should lead its own session (sid {sid}, pid {pid})"
+    );
+}
+
+#[test]
+fn serve_runs_in_foreground_and_initialises() {
+    let p = Pgx::new();
+    // No init: serve must create the cluster and run the engine in the foreground.
+    let mut child = p
+        .cmd(&["serve"])
+        .env("PGX_PORT", p.port.to_string())
+        .spawn()
+        .expect("spawn pgx serve");
+    // wait for readiness
+    let mut ready = false;
+    for _ in 0..240 {
+        if p.home.join("config.json").is_file()
+            && !p.engine_pids().is_empty()
+            && p.psql("postgres", "SELECT 1").stdout.trim() == "1"
+        {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(ready, "pgx serve did not become ready\n{}", p.log_tail());
+    // The engine is a child of the serve process (foreground), i.e. serve exec'd it.
+    assert!(
+        p.home.join("data/PG_VERSION").is_file(),
+        "serve did not initialise"
+    );
+    // SIGTERM to the serve process stops the engine cleanly.
+    unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    let status = child.wait().expect("wait serve");
+    let _ = status;
+    for _ in 0..200 {
+        if p.engine_pids().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        p.engine_pids().is_empty(),
+        "engine survived SIGTERM to the foreground process"
+    );
+}
+
+#[test]
+fn init_honors_pgx_password_env() {
+    let p = Pgx::new();
+    let port = p.port.to_string();
+    let r = p
+        .cmd(&["init", "--port", &port])
+        .env("PGX_PASSWORD", "supersecret123")
+        .output()
+        .unwrap();
+    assert_eq!(common::Run::from(r).code, 0);
+    assert_eq!(p.config()["password"], "supersecret123");
+    // too short is rejected
+    let p2 = Pgx::new();
+    let port2 = p2.port.to_string();
+    let r = common::Run::from(
+        p2.cmd(&["init", "--port", &port2])
+            .env("PGX_PASSWORD", "short")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(r.code, 2, "{}", r.all());
+    assert!(r.stderr.contains("too short"), "{}", r.stderr);
 }

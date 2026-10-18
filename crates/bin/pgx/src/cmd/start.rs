@@ -63,6 +63,10 @@ fn start_locked(out: &Out, ctx: &Ctx, restarted: bool) -> Result<ExitCode> {
         std::fs::remove_file(&pid_file)
             .map_err(|e| PgxError::io("cannot remove", &pid_file, &e))?;
     }
+    // Clear a socket lock left by an engine that is gone (its PID not alive,
+    // zombie-aware). On a host whose PID 1 reaps children the engine does this
+    // itself; in a bare container it does not, and the stale lock blocks start.
+    process::clear_stale_socket_lock(&sock_dir, ctx.config.port);
     // Retry the probe briefly: a genuine conflict persists, but a socket lingering
     // from an engine we just stopped or killed clears within the kernel's cleanup
     // window (the engine itself binds with SO_REUSEADDR and would not hit it).
@@ -153,6 +157,7 @@ pub fn serve(out: &Out) -> Result<ExitCode> {
     if pid_file.exists() {
         let _ = std::fs::remove_file(&pid_file);
     }
+    crate::process::clear_stale_socket_lock(&sock_dir, ctx.config.port);
     let block_clone = fsdetect::supports_block_clone(&ctx.home.data);
     let pgx_conf = ctx.home.data.join("pgx.conf");
     std::fs::write(

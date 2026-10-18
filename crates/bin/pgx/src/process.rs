@@ -46,7 +46,30 @@ pub fn pid_alive(pid: u32) -> bool {
         return false;
     }
     let r = unsafe { libc::kill(pid as i32, 0) };
-    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    let exists = r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+    // A zombie still "exists" for kill(2) until its parent reaps it. The engine
+    // has already exited, so for liveness it is stopped. This matters when the
+    // engine's parent (the detached `pgx start`) is gone and PID 1 does not reap
+    // children — common in containers without an init and in CI.
+    exists && !is_zombie(pid)
+}
+
+#[cfg(target_os = "linux")]
+fn is_zombie(pid: u32) -> bool {
+    // /proc/<pid>/stat: "<pid> (<comm>) <state> ...". comm may contain spaces
+    // and parentheses, so read the state after the LAST ')'.
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => match stat.rfind(')') {
+            Some(i) => stat[i + 1..].trim_start().starts_with('Z'),
+            None => false,
+        },
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_zombie(_pid: u32) -> bool {
+    false
 }
 
 /// The process's command line, or None if it is gone.
@@ -165,6 +188,25 @@ pub fn spawn(
             install.engine.display()
         ))
     })
+}
+
+/// Removes a leftover Unix-socket lock file (and socket) for our port when the
+/// postmaster it names is not alive. The engine does this itself for a dead
+/// PID, but a zombie (unreaped by a non-init PID 1, as in a bare container)
+/// looks alive to it and blocks startup; our liveness check sees the zombie as
+/// dead, so we clear the stale files. Safe: only when the named PID is gone.
+pub fn clear_stale_socket_lock(sock_dir: &Path, port: u16) {
+    let lock = sock_dir.join(format!(".s.PGSQL.{port}.lock"));
+    let named_pid = std::fs::read_to_string(&lock)
+        .ok()
+        .and_then(|t| t.lines().next().and_then(|l| l.trim().parse::<u32>().ok()));
+    match named_pid {
+        Some(pid) if pid_alive(pid) => {} // a live postmaster owns it; leave it
+        _ => {
+            let _ = std::fs::remove_file(&lock);
+            let _ = std::fs::remove_file(sock_dir.join(format!(".s.PGSQL.{port}")));
+        }
+    }
 }
 
 pub fn log_tail(home: &Home, n: usize) -> String {
@@ -312,6 +354,26 @@ mod tests {
         assert_eq!(p.sock_dir, Some(PathBuf::from("/Users/x/.pgx/run")));
         assert!(read_pid_file(&dir.join("nope")).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn zombie_is_not_alive() {
+        // Fork a child that exits immediately; without waitpid it is a zombie.
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            unsafe { libc::_exit(0) };
+        }
+        assert!(pid > 0);
+        // give it a moment to exit
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            !pid_alive(pid as u32),
+            "an unreaped exited child (zombie) must count as not alive"
+        );
+        // reap it so we leave nothing behind
+        let mut status = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0) };
     }
 
     #[test]

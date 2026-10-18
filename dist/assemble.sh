@@ -19,7 +19,7 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT=""; VERSION=""; ENGINE="$ROOT/target/release/postgres"; PGX="$ROOT/target/release/pgx"
-PG_BINDIR=""; STAGED=""
+PG_BINDIR=""; STAGED=""; TZDIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2 ;;
@@ -28,6 +28,7 @@ while [ $# -gt 0 ]; do
     --pgx) PGX="$2"; shift 2 ;;
     --pg-bindir) PG_BINDIR="$2"; shift 2 ;;
     --staged-share) STAGED="$2"; shift 2 ;;
+    --tzdir) TZDIR="$2"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "assemble.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -47,7 +48,16 @@ else INITDB="$(command -v initdb || true)"; PG_CONFIG="$(command -v pg_config ||
 INITDB_VERSION="$("$INITDB" --version | sed -n 's/^initdb (PostgreSQL) \([0-9][0-9.]*\).*/\1/p')"
 case "$INITDB_VERSION" in 18.*) ;; *) die "initdb is $INITDB_VERSION; PostgreSQL 18.x is required" ;; esac
 PG_SHARE="$("$PG_CONFIG" --sharedir)"
-for d in timezone timezonesets tsearch_data; do [ -d "$PG_SHARE/$d" ] || die "PostgreSQL share dir lacks $d: $PG_SHARE"; done
+for d in timezonesets tsearch_data; do [ -d "$PG_SHARE/$d" ] || die "PostgreSQL share dir lacks $d: $PG_SHARE"; done
+# timezone: under the PG share dir (macOS/Homebrew), else the system zoneinfo
+# (Debian/Ubuntu build PostgreSQL --with-system-tzdata=/usr/share/zoneinfo).
+if [ -z "$TZDIR" ]; then
+  if [ -d "$PG_SHARE/timezone" ]; then TZDIR="$PG_SHARE/timezone"
+  elif [ -d /usr/share/zoneinfo ]; then TZDIR=/usr/share/zoneinfo
+  else die "no timezone data found (looked in $PG_SHARE/timezone and /usr/share/zoneinfo); pass --tzdir"; fi
+fi
+[ -d "$TZDIR" ] || die "timezone dir not found: $TZDIR"
+[ -f "$TZDIR/UTC" ] || die "timezone dir has no UTC zone: $TZDIR"
 
 case "$(uname -s)" in Darwin) OS=darwin ;; Linux) OS=linux ;; *) die "unsupported OS: $(uname -s)" ;; esac
 case "$(uname -m)" in x86_64|amd64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) die "unsupported CPU: $(uname -m)" ;; esac
@@ -62,7 +72,8 @@ cp "$ENGINE" "$P/bin/postgres"; cp "$PGX" "$P/bin/pgx"; chmod 755 "$P/bin/postgr
 
 # Share trees the engine reads (dereference symlinks: Homebrew's share dir is links).
 copy_tree() { mkdir -p "$2"; (cd "$1" && tar -chf - .) | (cd "$2" && tar -xf -); }
-for d in timezone timezonesets tsearch_data; do copy_tree "$PG_SHARE/$d" "$P/share/$d"; done
+copy_tree "$TZDIR" "$P/share/timezone"
+for d in timezonesets tsearch_data; do copy_tree "$PG_SHARE/$d" "$P/share/$d"; done
 # Vendored contrib extension scripts and tsearch data win over PostgreSQL's.
 copy_tree "$STAGED/extension" "$P/share/extension"
 [ -d "$STAGED/tsearch_data" ] && copy_tree "$STAGED/tsearch_data" "$P/share/tsearch_data"
@@ -89,7 +100,7 @@ cp "$ROOT/dist/layout.md" "$P/share/pgx/layout.md"
 ENGINE_COMMIT="$(git -C "$ROOT" rev-parse --short=10 HEAD 2>/dev/null || echo unknown)"
 if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null | grep -v '^??' || true)" ]; then ENGINE_COMMIT="$ENGINE_COMMIT-dirty"; fi
 cat > "$P/share/pgx/dist.json" <<JSON
-{"pgx_version":"$VERSION","engine_commit":"$ENGINE_COMMIT","postgres_compat":"18.6","initdb_version":"$INITDB_VERSION","os":"$OS","arch":"$ARCH","built_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+{"pgx_version":"$VERSION","engine_commit":"$ENGINE_COMMIT","postgres_compat":"18.6","initdb_version":"$INITDB_VERSION","tzdata_source":"$TZDIR","os":"$OS","arch":"$ARCH","built_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 JSON
 
 [ "$(find "$P" -type l | wc -l | tr -d ' ')" = 0 ] || die "symlinks survived in $P"

@@ -29,6 +29,17 @@ def dist_prefix():
     return p
 
 
+def _is_zombie(pid):
+    # A process that has exited but not been reaped (common when PID 1 does not
+    # reap, e.g. a bare container) still appears in pgrep; it is not running.
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            stat = f.read()
+        return stat[stat.rfind(")") + 1:].strip().startswith("Z")
+    except OSError:
+        return False
+
+
 def free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -143,8 +154,9 @@ class Pgx:
             return None
 
     def engine_pids(self):
-        out = subprocess.run(["pgrep", "-f", "--", "postgres .*-D %s( |$)" % self.data], capture_output=True, text=True).stdout
-        return [int(x) for x in out.split()]
+        out = subprocess.run(["pgrep", "-f", "postgres .*-D %s" % self.data], capture_output=True, text=True).stdout
+        pids = [int(x) for x in out.split()]
+        return [p for p in pids if not _is_zombie(p)]
 
     def kill(self, sig=signal.SIGKILL):
         pid = self.engine_pid()

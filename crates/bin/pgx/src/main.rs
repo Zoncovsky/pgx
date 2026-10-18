@@ -11,6 +11,8 @@ mod names;
 mod out;
 mod pgwire;
 mod process;
+mod ttl;
+mod ttlstore;
 
 use cli::{Command, ExitCode};
 use errors::{PgxError, Result};

@@ -223,6 +223,16 @@ fn many_temporary_branches_expire_on_one_runtime() {
         std::thread::sleep(Duration::from_millis(500));
     }
     assert!(db_exists(&p, "base") && db_exists(&p, "app"));
+    // Protected system databases must survive mass expiration. Their names
+    // (`template0`/`template1`) lexically resemble a temp-branch prefix, so this
+    // pins that the supervisor skips them by identity, never by name matching,
+    // even when many deletions fire at once.
+    for sys in ["postgres", "template0", "template1"] {
+        assert!(
+            db_exists(&p, sys),
+            "protected system database {sys} must never be auto-deleted"
+        );
+    }
 }
 
 /// Hex-encoded metadata filename, matching ttlstore's scheme.

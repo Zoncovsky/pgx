@@ -55,11 +55,21 @@ pub fn random_password() -> Result<String> {
     Ok(out)
 }
 
-pub fn now_rfc3339() -> String {
-    let secs = std::time::SystemTime::now()
+/// Current time as whole Unix epoch seconds (UTC). Monotonic enough for TTL
+/// deadlines; TTL math never relies on sub-second precision.
+pub fn now_epoch() -> u64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+pub fn now_rfc3339() -> String {
+    rfc3339(now_epoch())
+}
+
+/// Format Unix epoch seconds as an RFC 3339 UTC timestamp.
+pub fn rfc3339(secs: u64) -> String {
     // civil-from-days (Howard Hinnant), UTC
     let days = (secs / 86400) as i64;
     let rem = secs % 86400;

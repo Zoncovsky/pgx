@@ -5,6 +5,8 @@ pub mod run;
 pub mod start;
 pub mod status;
 pub mod stop;
+pub mod supervise;
+pub mod ttl;
 pub mod version;
 
 use crate::cli::ExitCode;
@@ -38,6 +40,16 @@ impl Ctx {
             .run_dir
             .clone()
             .unwrap_or_else(|| self.home.run.clone())
+    }
+
+    /// A stable identity for this cluster incarnation: the canonical data-dir
+    /// path plus the init timestamp. `pgx init --force` rewrites `created_at`,
+    /// so a re-initialised cluster at the same path gets a new identity and
+    /// cannot match TTL metadata from the previous one.
+    pub fn cluster_id(&self) -> String {
+        let data =
+            std::fs::canonicalize(&self.home.data).unwrap_or_else(|_| self.home.data.clone());
+        format!("{}#{}", data.display(), self.config.created_at)
     }
 
     /// The pid of a running engine on this data directory, if any (stale pid files are ignored).

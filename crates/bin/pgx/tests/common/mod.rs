@@ -104,9 +104,53 @@ impl Pgx {
         let mut c = Command::new(self.bin());
         c.args(args)
             .env("PGX_HOME", &self.home)
+            // Poll TTL cleanup every second in tests so expiry is prompt.
+            .env("PGX_TTL_INTERVAL", "1")
             .env_remove("PGPORT")
             .env_remove("PGHOST");
         c
+    }
+
+    /// The background TTL supervisor's pid for this home, if it recorded one.
+    pub fn supervisor_pid(&self) -> Option<u32> {
+        std::fs::read_to_string(self.home.join("supervisor.pid"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+    }
+
+    /// True when a supervisor process recorded in this home is actually alive.
+    pub fn supervisor_running(&self) -> bool {
+        match self.supervisor_pid() {
+            Some(pid) => (unsafe { libc::kill(pid as i32, 0) }) == 0,
+            None => false,
+        }
+    }
+
+    /// Poll until this runtime's TCP port is bindable again (released by a
+    /// stopped engine), up to `secs`. Lets a stop/start test rebind the same
+    /// port deterministically without racing the kernel's socket teardown under
+    /// heavy parallel load.
+    pub fn wait_port_free(&self, secs: u64) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        while std::time::Instant::now() < deadline {
+            if TcpListener::bind(("127.0.0.1", self.port)).is_ok() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        false
+    }
+
+    /// Poll until the supervisor is alive, up to `secs`.
+    pub fn wait_supervisor(&self, secs: u64) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        while std::time::Instant::now() < deadline {
+            if self.supervisor_running() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        false
     }
 
     /// Run a prepared command, retrying only a failure to SPAWN the process
@@ -313,6 +357,10 @@ pub fn find_psql() -> PathBuf {
 
 impl Drop for Pgx {
     fn drop(&mut self) {
+        // Stop the TTL supervisor first so it does not linger after the home is gone.
+        if let Some(pid) = self.supervisor_pid() {
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
         let _ = self.cmd(&["stop", "--force"]).output();
         for pid in self.engine_pids() {
             unsafe { libc::kill(pid as i32, libc::SIGKILL) };

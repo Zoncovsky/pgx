@@ -14,10 +14,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        # amd64 Linux, arm64 Linux (native runner), and arm64 macOS — the three
+        # architectures PGX ships for. Each leg runs the full suite natively.
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Confirm architecture
+        run: |
+          echo "runner.os=${{ runner.os }} runner.arch=${{ runner.arch }}"
+          echo "uname -m: $(uname -m)"
+          echo "uname -a: $(uname -a)"
       - name: Install PostgreSQL 18 and RE2 (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -60,14 +67,23 @@ jobs:
       - name: Black-box suites
         run: |
           python3 -I tests/pgx/test_sql.py
-          cargo test -p pgx --release --test lifecycle --test databases --test clone --test doctor --test run
+          cargo test -p pgx --release --test lifecycle --test databases --test clone --test doctor --test run --test ttl
       - name: Installer end-to-end
         run: dist/test/install_test.sh
   docker:
-    name: Docker image
-    runs-on: ubuntu-24.04
+    name: Docker image (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Build and TTL-test the image natively on both amd64 and arm64 Linux.
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Confirm architecture
+        run: |
+          echo "runner.arch=${{ runner.arch }} uname -m: $(uname -m)"
+          docker version --format '{{.Server.Arch}}' || true
       - name: Build and test the image
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client-16 || true

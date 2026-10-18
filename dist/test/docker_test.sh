@@ -20,7 +20,9 @@ echo "building image ..."
 # Not -q: surface the build output (e.g. assemble.sh's own error) on failure.
 docker build -t "$TAG" "$ROOT" || fail "docker build"
 echo "starting container ..."
-docker run -d --name "$NAME" -e PGX_PASSWORD=dockerpass -p "$PORT:5432" -v "$VOL:/var/lib/pgx" "$TAG" >/dev/null || fail "docker run"
+# PGX_TTL_INTERVAL=1 makes the in-container supervisor poll once a second so the
+# TTL section below is quick and deterministic.
+docker run -d --name "$NAME" -e PGX_PASSWORD=dockerpass -e PGX_TTL_INTERVAL=1 -p "$PORT:5432" -v "$VOL:/var/lib/pgx" "$TAG" >/dev/null || fail "docker run"
 URL="postgres://postgres:dockerpass@127.0.0.1:$PORT/postgres"
 ok=""
 for _ in $(seq 1 60); do
@@ -34,3 +36,18 @@ for _ in $(seq 1 60); do psql "$URL" -Atqc "SELECT 1" >/dev/null 2>&1 && break; 
 got="$(psql "$URL" -Atqc "SELECT v FROM persist" 2>/dev/null || true)"
 [ "$got" = "survives" ] || fail "data did not persist across restart (got '$got')"
 echo "PASS: Docker image builds, initialises, serves over TCP, and persists across a restart"
+
+# TTL: the entrypoint runs `pgx serve`, which spawns the background supervisor.
+# A temporary database must auto-expire inside the container; a permanent one
+# must survive. Exercises the supervisor end-to-end in the shipped image.
+echo "testing TTL auto-cleanup in-container ..."
+docker exec "$NAME" pgx create keepdb >/dev/null 2>&1 || fail "TTL: create permanent keepdb"
+docker exec "$NAME" pgx create tempdb --ttl 3s >/dev/null 2>&1 || fail "TTL: create tempdb --ttl 3s"
+gone=""
+for _ in $(seq 1 30); do
+  if ! docker exec "$NAME" pgx ls --json 2>/dev/null | grep -q '"tempdb"'; then gone=1; break; fi
+  sleep 1
+done
+[ -n "$gone" ] || { docker exec "$NAME" pgx ls || true; fail "TTL: tempdb was not auto-deleted"; }
+docker exec "$NAME" pgx ls --json 2>/dev/null | grep -q '"keepdb"' || fail "TTL: permanent keepdb was deleted"
+echo "PASS: Docker image runs the TTL supervisor; temporary db auto-expired, permanent db survived"

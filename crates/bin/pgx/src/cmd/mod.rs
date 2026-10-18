@@ -1,6 +1,7 @@
 pub mod db;
 pub mod doctor;
 pub mod init;
+pub mod run;
 pub mod start;
 pub mod status;
 pub mod stop;

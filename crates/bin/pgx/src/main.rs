@@ -52,6 +52,7 @@ fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
             force,
         } => cmd::init::run(&out, port, durability, force),
         Command::Serve => cmd::start::serve(&out),
+        Command::Run => cmd::run::run(&out),
         Command::Doctor => cmd::doctor::run(&out),
         other => {
             let home = layout::Home::resolve();
@@ -75,6 +76,7 @@ fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
                 Command::Help
                 | Command::Version
                 | Command::Init { .. }
+                | Command::Run
                 | Command::Doctor
                 | Command::Serve => unreachable!(),
             }

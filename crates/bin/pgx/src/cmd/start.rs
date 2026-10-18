@@ -32,10 +32,18 @@ impl StartLock {
     }
 }
 
+/// The result of ensuring the runtime is up, for callers that compose (`pgx run`).
+pub struct StartOutcome {
+    pub started: bool,
+    pub already_running: bool,
+    pub pid: u32,
+}
+
 pub fn run(out: &Out) -> Result<ExitCode> {
     let ctx = Ctx::load()?;
-    let _lock = StartLock::acquire(&ctx)?;
-    start_locked(out, &ctx, false)
+    let outcome = ensure_running(out, &ctx)?;
+    emit_start(out, &ctx, &outcome, false);
+    Ok(ExitCode::Ok)
 }
 
 pub fn restart(out: &Out) -> Result<ExitCode> {
@@ -45,17 +53,27 @@ pub fn restart(out: &Out) -> Result<ExitCode> {
         out.note(&format!("stopping pid {pid}"));
         process::stop(pid, process::StopMode::Fast, Duration::from_secs(60), None)?;
     }
-    start_locked(out, &ctx, true)
+    let outcome = start_locked(out, &ctx)?;
+    emit_start(out, &ctx, &outcome, true);
+    Ok(ExitCode::Ok)
 }
 
-fn start_locked(out: &Out, ctx: &Ctx, restarted: bool) -> Result<ExitCode> {
+/// Acquire the start lock and start the runtime if it is not already up.
+/// Idempotent; serialises concurrent starts; does not emit, so a composite
+/// command (`pgx run`) can report the whole operation once.
+pub fn ensure_running(out: &Out, ctx: &Ctx) -> Result<StartOutcome> {
+    let _lock = StartLock::acquire(ctx)?;
+    start_locked(out, ctx)
+}
+
+fn start_locked(out: &Out, ctx: &Ctx) -> Result<StartOutcome> {
     let sock_dir = ctx.sock_dir();
     if let Some(pid) = ctx.running_pid() {
-        out.emit(
-            &format!("PGX is already running (pid {pid}) on port {}", ctx.config.port),
-            serde_json::json!({"started": false, "already_running": true, "pid": pid, "port": ctx.config.port, "socket_dir": sock_dir}),
-        );
-        return Ok(ExitCode::Ok);
+        return Ok(StartOutcome {
+            started: false,
+            already_running: true,
+            pid,
+        });
     }
     let pid_file = ctx.home.data.join("postmaster.pid");
     if pid_file.exists() {
@@ -114,21 +132,41 @@ fn start_locked(out: &Out, ctx: &Ctx, restarted: bool) -> Result<ExitCode> {
         }
     }
     // The child lives on in its own session; the CLI exits without reaping it.
+    Ok(StartOutcome {
+        started: true,
+        already_running: false,
+        pid,
+    })
+}
+
+/// Render the outcome of `pgx start` / `pgx restart` in human and JSON form.
+fn emit_start(out: &Out, ctx: &Ctx, o: &StartOutcome, restarted: bool) {
+    let sock_dir = ctx.sock_dir();
+    if o.already_running {
+        out.emit(
+            &format!(
+                "PGX is already running (pid {}) on port {}",
+                o.pid, ctx.config.port
+            ),
+            serde_json::json!({"started": false, "already_running": true, "pid": o.pid, "port": ctx.config.port, "socket_dir": sock_dir}),
+        );
+        return;
+    }
     let url = format!(
         "postgres://postgres:***@127.0.0.1:{}/postgres",
         ctx.config.port
     );
     out.emit(
         &format!(
-            "{} PGX (pid {pid}) on port {}\n  socket  {}\n  url     {url}   (`pgx url <database>` shows the password)\n  log     {}",
+            "{} PGX (pid {}) on port {}\n  socket  {}\n  url     {url}   (`pgx url <database>` shows the password)\n  log     {}",
             if restarted { "restarted" } else { "started" },
+            o.pid,
             ctx.config.port,
             sock_dir.display(),
             ctx.home.log_file.display()
         ),
-        serde_json::json!({"started": true, "already_running": false, "pid": pid, "port": ctx.config.port, "socket_dir": sock_dir, "log": ctx.home.log_file}),
+        serde_json::json!({"started": true, "already_running": false, "pid": o.pid, "port": ctx.config.port, "socket_dir": sock_dir, "log": ctx.home.log_file}),
     );
-    Ok(ExitCode::Ok)
 }
 
 /// `pgx serve`: run the engine in the FOREGROUND, replacing this process, so it

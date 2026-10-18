@@ -109,14 +109,15 @@ impl Pgx {
         c
     }
 
-    pub fn run(&self, args: &[&str]) -> Run {
-        // Retry only a failure to SPAWN the process, not a non-zero exit (which
-        // is a real result and returned as-is): under heavy CI parallelism
-        // fork/exec can transiently fail (EAGAIN, or ETXTBSY on a freshly
-        // written binary). A real result returns immediately.
+    /// Run a prepared command, retrying only a failure to SPAWN the process
+    /// (never a non-zero exit, which is a real result): under heavy CI
+    /// parallelism fork/exec can transiently fail — EAGAIN, or ETXTBSY on the
+    /// freshly copied pgx binary ("Text file busy"). The transient clears in
+    /// milliseconds.
+    fn output_retrying(&self, make: impl Fn() -> Command, what: &str) -> Run {
         let mut last = None;
-        for _ in 0..5 {
-            match self.cmd(args).output() {
+        for _ in 0..8 {
+            match make().output() {
                 Ok(o) => return Run::from(o),
                 Err(e) => {
                     last = Some(e);
@@ -124,12 +125,53 @@ impl Pgx {
                 }
             }
         }
-        panic!("could not spawn pgx after retries: {}", last.unwrap());
+        panic!("could not spawn {what} after retries: {}", last.unwrap());
+    }
+
+    pub fn run(&self, args: &[&str]) -> Run {
+        self.output_retrying(|| self.cmd(args), "pgx")
     }
 
     pub fn init(&self) -> Run {
         let port = self.port.to_string();
         self.run(&["init", "--port", &port])
+    }
+
+    /// `pgx run [extra...]` with PGX_PORT pinned to this harness's free port, so
+    /// a fresh run initialises there instead of scanning 5432-5500 (and colliding
+    /// with a real PostgreSQL or a sibling test).
+    pub fn run_cmd(&self, extra: &[&str]) -> Run {
+        let mut args = vec!["run"];
+        args.extend_from_slice(extra);
+        self.output_retrying(
+            || {
+                let mut c = self.cmd(&args);
+                c.env("PGX_PORT", self.port.to_string());
+                c
+            },
+            "pgx run",
+        )
+    }
+
+    /// Spawn `pgx run` without waiting — for concurrency tests.
+    pub fn spawn_run(&self) -> std::process::Child {
+        let mut last = None;
+        for _ in 0..8 {
+            match self
+                .cmd(&["run"])
+                .env("PGX_PORT", self.port.to_string())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(c) => return c,
+                Err(e) => {
+                    last = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+        panic!("could not spawn pgx run after retries: {}", last.unwrap());
     }
 
     pub fn init_ok(&self) {

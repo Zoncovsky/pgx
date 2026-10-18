@@ -19,6 +19,16 @@ and refuses an unsupported platform or a tampered download.
 Environment overrides: `PGX_VERSION`, `PGX_INSTALL_DIR`, `PGX_BIN_DIR`,
 `PGX_BASE_URL`. Ensure `PGX_BIN_DIR` (default `~/.local/bin`) is on your `PATH`.
 
+Then get a database in one step:
+
+```sh
+pgx run
+```
+
+`pgx run` initialises PGX if needed, starts it, ensures a default `app`
+database, and prints its connection URL. It is idempotent — run it again any
+time; it never resets your data.
+
 ## From a release tarball
 
 Download `pgx-<version>-<os>-<arch>.tar.gz`, verify it against `checksums.txt`,

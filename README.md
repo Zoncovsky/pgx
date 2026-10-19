@@ -16,8 +16,9 @@ PGX is a database runtime for short-lived Postgres databases: agent
 sandboxes, CI and per-PR databases, test and preview environments. One PGX
 process holds many isolated databases. Each costs tens of kilobytes of
 memory while idle, is created in milliseconds from a sealed template, and
-is backed by a ZFS copy-on-write clone that starts at a few megabytes,
-whatever the template's size.
+is backed, on a copy-on-write storage backend such as ZFS, by a clone
+that starts at a few megabytes whatever the template's size (on a
+filesystem without block cloning a branch is a full copy).
 
 PGX speaks the Postgres wire protocol and SQL dialect. Rails, Django,
 Prisma, SQLAlchemy and node-postgres run their full migrate → test →
@@ -313,7 +314,7 @@ pgx start         # start the runtime
 pgx create myapp  # a database
 pgx url myapp     # its connection URL — point DATABASE_URL at this
 pgx status        # running?, port, databases, memory
-pgx clone myapp test_1   # copy-on-write clone
+pgx clone myapp test_1   # fast clone (copy-on-write where the backend supports it)
 pgx stop
 ```
 
@@ -322,6 +323,26 @@ install options, integrations (Rails, Node, Python, Go, psql), storage model
 and troubleshooting are under [`docs/pgx/local-dev/`](docs/pgx/local-dev/); the
 test matrix and release decision are in
 [`docs/pgx/local-dev/validation-report.md`](docs/pgx/local-dev/validation-report.md).
+
+### Branching and temporary databases
+
+Clones are fast branches: copy-on-write on a backend with block cloning
+(such as ZFS), a full copy elsewhere. Any database can also carry a TTL so
+it cleans itself up — a branch per agent, pull request or CI job that you
+never have to remember to delete.
+
+```bash
+pgx clone myapp pr-123 --ttl 30m   # a 30-minute branch of myapp for one PR
+pgx create scratch --ttl 2h        # a throwaway database, gone in 2 hours
+pgx ls                             # shows each database's TTL and expiry
+pgx ttl pr-123 unlimited           # changed your mind — keep it for good
+```
+
+Databases created without `--ttl` are permanent. A background supervisor
+drops each temporary database shortly after its deadline, never touches
+permanent or system databases, and resumes cleanup automatically after a
+`pgx stop` / `pgx start`. Details and the identity-safety model are in
+[`docs/pgx/local-dev/ttl.md`](docs/pgx/local-dev/ttl.md).
 
 ### Build from source
 

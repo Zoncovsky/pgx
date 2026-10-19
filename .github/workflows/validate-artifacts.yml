@@ -93,7 +93,10 @@ jobs:
       - name: Clean-runtime base (only libxml2 + ICU, as the Docker runtime ships)
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends libxml2 libicu74 ca-certificates git
+          # libxml2 + ICU are the only PGX runtime libs (as the Docker runtime
+          # ships); file/procps/git are generic utilities the smoke test needs
+          # (arch check, process checks, checkout) — not PostgreSQL.
+          apt-get install -y --no-install-recommends libxml2 libicu74 ca-certificates git file procps
           # Prove there is NO system PostgreSQL server/initdb in this image.
           if command -v postgres || command -v initdb; then echo "unexpected system postgres"; exit 1; fi
       - uses: actions/checkout@v4

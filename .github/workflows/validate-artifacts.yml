@@ -1,0 +1,132 @@
+name: Validate packaged artifacts
+# Builds the EXACT public release tarballs for every supported platform and
+# smoke-tests each one in a genuinely clean environment (no system PostgreSQL,
+# no Homebrew RE2/abseil; Linux in a bare ubuntu:24.04 container). Proves the
+# artifact a developer downloads actually runs. Uploads actions artifacts only
+# — it never creates a tag or a GitHub Release.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version string to stamp (no leading v)
+        default: 0.1.0-beta.1
+  # Temporary: run on pushes to the fix branch to gather pre-merge evidence.
+  # Remove this trigger (keep workflow_dispatch) before/after merge.
+  push:
+    branches: ["fix/macos-selfcontained-abseil"]
+permissions:
+  contents: read
+env:
+  VERSION: ${{ github.event.inputs.version || '0.1.0-beta.1' }}
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04,     target: linux-amd64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+          - { os: macos-14,         target: darwin-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo wget -qO /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-18 postgresql-client-18 libre2-dev pkg-config build-essential
+          echo "PG18_BINDIR=/usr/lib/postgresql/18/bin" >> "$GITHUB_ENV"
+      - name: Install toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install postgresql@18 pkg-config cmake ninja
+          echo "PG18_BINDIR=$(brew --prefix postgresql@18)/bin" >> "$GITHUB_ENV"
+      - name: Cache static re2+abseil prefix (macOS)
+        if: runner.os == 'macOS'
+        id: re2cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pgx-static-re2
+          key: static-re2-macos-arm64-absl20260817.0-re2-2025-11-05-v1
+      - name: Build static re2+abseil prefix (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          PREFIX="$(PGX_RE2_PREFIX="$RUNNER_TEMP/pgx-static-re2" dist/macos/build-static-re2.sh)"
+          echo "PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "1.96.0" }
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (release, packaged binaries)
+        run: cargo build --release --locked --bin postgres --bin pgx
+      - name: Assemble the release tarball
+        run: dist/assemble.sh --out "$RUNNER_TEMP/rel" --version "$VERSION" --pg-bindir "$PG18_BINDIR"
+      - name: Self-contained check (macOS)
+        if: runner.os == 'macOS'
+        run: dist/test/macos_selfcontained_test.sh "$(find "$RUNNER_TEMP/rel" -maxdepth 1 -type d -name "pgx-$VERSION-*")"
+      - name: Show architecture + checksum
+        run: |
+          uname -m
+          ls -l "$RUNNER_TEMP/rel"
+          cat "$RUNNER_TEMP"/rel/*.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pgx-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/rel/*.tar.gz
+            ${{ runner.temp }}/rel/*.tar.gz.sha256
+
+  smoke-linux:
+    name: smoke ${{ matrix.target }} (clean ubuntu:24.04)
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04,     target: linux-amd64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+    runs-on: ${{ matrix.os }}
+    container: ubuntu:24.04
+    steps:
+      - name: Clean-runtime base (only libxml2 + ICU, as the Docker runtime ships)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libxml2 libicu74 ca-certificates git
+          # Prove there is NO system PostgreSQL server/initdb in this image.
+          if command -v postgres || command -v initdb; then echo "unexpected system postgres"; exit 1; fi
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: pgx-${{ matrix.target }}, path: dl }
+      - name: Verify checksum, architecture, extract
+        run: |
+          cd dl
+          sha256sum -c ./*.tar.gz.sha256
+          tar -xzf ./*.tar.gz
+          d="$(find . -maxdepth 1 -type d -name 'pgx-*')"
+          file "$d/bin/postgres" | tee /dev/stderr | grep -qiE 'ELF 64-bit'
+          echo "DIST=$PWD/$d" >> "$GITHUB_ENV"
+      - name: Smoke test the packaged artifact (clean environment)
+        run: dist/test/smoke_packaged.sh "$DIST"
+
+  smoke-macos:
+    name: smoke darwin-arm64 (no Homebrew re2/abseil loaded)
+    needs: build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: pgx-darwin-arm64, path: dl }
+      - name: Verify checksum, architecture, extract
+        run: |
+          cd dl
+          shasum -a 256 -c ./*.tar.gz.sha256
+          tar -xzf ./*.tar.gz
+          d="$(find . -maxdepth 1 -type d -name 'pgx-*')"
+          file "$d/bin/postgres" | grep -qi 'Mach-O 64-bit executable arm64'
+          echo "DIST=$PWD/$d" >> "$GITHUB_ENV"
+      - name: Self-contained + smoke (asserts 0 Homebrew dylibs loaded)
+        run: |
+          dist/test/macos_selfcontained_test.sh "$DIST"
+          dist/test/smoke_packaged.sh "$DIST"

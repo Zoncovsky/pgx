@@ -15,6 +15,9 @@ set -eu
 
 REPO="pgrundev/pgx"
 BASE_URL="${PGX_BASE_URL:-https://github.com/$REPO/releases/download}"
+# GitHub REST base for release discovery (overridable so the installer is
+# testable against a local server).
+API_URL="${PGX_API_URL:-https://api.github.com/repos/$REPO}"
 BIN_DIR="${PGX_BIN_DIR:-$HOME/.local/bin}"
 
 err() { echo "pgx installer: $*" >&2; exit 1; }
@@ -43,8 +46,12 @@ else err "need curl or wget"; fi
 
 version="${PGX_VERSION:-}"
 if [ -z "$version" ]; then
-  version="$(dlout "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
-  [ -n "$version" ] || err "could not determine the latest version; set PGX_VERSION"
+  # `/releases/latest` EXCLUDES prereleases, so during the beta it would miss
+  # e.g. v0.1.0-beta.1. Use the releases list instead (newest first; still
+  # excludes drafts) and take the most recent published release's tag. GitHub
+  # returns pretty-printed JSON, so the first "tag_name" line is the newest.
+  version="$(dlout "$API_URL/releases?per_page=30" | grep -m1 '"tag_name"' | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p')"
+  [ -n "$version" ] || err "could not find a published release to install; set PGX_VERSION (none published yet?)"
 fi
 version="${version#v}"
 install_dir="${PGX_INSTALL_DIR:-$HOME/.pgx/dist/$version}"
@@ -95,4 +102,4 @@ case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) echo "pgx installer: add $BIN_DIR to your PATH:  export PATH=\"$BIN_DIR:\$PATH\"" ;;
 esac
-echo "pgx installer: next: pgx init && pgx start"
+echo "pgx installer: next: pgx run"

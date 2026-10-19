@@ -7,8 +7,8 @@ development, CI and disposable databases. No system PostgreSQL required.
 
 ```sh
 curl -fsSL https://pgx.dev/install | sh
-pgx init && pgx start
-pgx create myapp && pgx url myapp
+pgx run                             # a ready `app` database in one step
+pgx clone app agent-001 --ttl 5m    # a disposable branch that auto-expires
 ```
 
 Or download the tarball for your platform below, verify its SHA-256 against

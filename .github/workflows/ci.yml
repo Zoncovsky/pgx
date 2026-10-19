@@ -9,6 +9,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  worker:
+    name: pgx.dev /install Worker tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Worker unit tests (node:test)
+        run: node --test dist/pgx.dev/install-worker.test.js
   cli:
     name: fmt, clippy, unit + black-box (${{ matrix.os }})
     strategy:

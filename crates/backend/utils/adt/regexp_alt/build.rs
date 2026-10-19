@@ -89,6 +89,11 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(have_re2)");
     println!("cargo:rerun-if-changed=src/re2_shim.cc");
     println!("cargo:rerun-if-env-changed=PGRUST_FORCE_NO_RE2");
+    // A changed re2/abseil prefix (how macOS release builds select the static
+    // closure — see the static-linking note below) must relink: without this,
+    // pointing PKG_CONFIG_PATH at a static prefix would be ignored on an
+    // incremental build and silently keep the previous (dynamic) linkage.
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     if wasm_target() {
         // wasm32 carve-out: libre2 is native C++ linked through the cc shim
         // and cannot be built for wasm32-wasip1 at all, so the release-family

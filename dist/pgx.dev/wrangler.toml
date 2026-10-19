@@ -1,0 +1,17 @@
+# Cloudflare Worker that serves https://pgx.dev/install (see install-worker.js).
+# PREPARED, NOT DEPLOYED — deploying requires Cloudflare account access and
+# maintainer approval. It does not touch DNS or any other pgx.dev route.
+name = "pgx-install"
+main = "install-worker.js"
+compatibility_date = "2026-10-01"
+
+# The route that this Worker owns. pgx.dev must already be a zone in the
+# Cloudflare account (it is — the domain resolves through Cloudflare today).
+routes = [
+  { pattern = "pgx.dev/install", zone_name = "pgx.dev" },
+]
+
+# Pin the installer to a released tag at deploy time:
+#   wrangler deploy --var INSTALL_REF:v0.1.0-beta.1
+[vars]
+INSTALL_REF = "main"

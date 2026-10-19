@@ -12,6 +12,25 @@
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
 </p>
 
+<p align="center">
+  <strong>PGX. Postgres for agents. 🐘</strong><br>
+  One runtime. Thousands of Postgres databases.
+</p>
+
+```bash
+curl -fsSL https://pgx.dev/install | sh
+pgx run
+pgx clone app agent-001 --ttl 5m
+```
+
+<p align="center">
+  No Docker required · Native Mac &amp; Linux · Automatic cleanup
+</p>
+
+<p align="center">
+  <sub>Open source · Free · Beta · Built for disposable development databases</sub>
+</p>
+
 PGX is a database runtime for short-lived Postgres databases: agent
 sandboxes, CI and per-PR databases, test and preview environments. One PGX
 process holds many isolated databases. Each costs tens of kilobytes of
@@ -309,12 +328,10 @@ distribution is self-contained and relocatable.
 ```bash
 curl -fsSL https://pgx.dev/install | sh
 
-pgx init          # create a cluster under ~/.pgx
-pgx start         # start the runtime
-pgx create myapp  # a database
-pgx url myapp     # its connection URL — point DATABASE_URL at this
-pgx status        # running?, port, databases, memory
-pgx clone myapp test_1   # fast clone (copy-on-write where the backend supports it)
+pgx run              # start the runtime with a ready `app` database
+pgx url app          # its connection URL — point DATABASE_URL at this
+pgx ls               # databases, TTL, expiry, memory
+pgx clone app test_1 # fast clone (copy-on-write where the backend supports it)
 pgx stop
 ```
 

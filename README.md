@@ -1,8 +1,8 @@
 <h1 align="center">PGX</h1>
 
 <p align="center">
-  <strong>Postgres for agents.</strong><br>
-  One Postgres-compatible runtime, thousands of disposable databases.
+  <strong>PGX. Postgres for agents. 🐘</strong><br>
+  One runtime. Thousands of Postgres databases.
 </p>
 
 <p align="center">
@@ -10,11 +10,6 @@
   <img alt="Version: v0.1" src="https://img.shields.io/badge/version-v0.1-blue">
   <img alt="Regression suite: 0 result differences" src="https://img.shields.io/badge/regression_suite-0_result_differences-brightgreen">
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
-</p>
-
-<p align="center">
-  <strong>PGX. Postgres for agents. 🐘</strong><br>
-  One runtime. Thousands of Postgres databases.
 </p>
 
 ```bash

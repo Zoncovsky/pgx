@@ -1,12 +1,24 @@
 //! Storage capability probes: does this directory's filesystem clone blocks?
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Per-call probe counter. The probe file names must be unique per call, not
+/// just per process: two `pgx` operations in one process — or the test suite's
+/// parallel tests — can probe the same directory at the same time, and sharing
+/// a name makes `clone_file` race (EEXIST/ENOENT) and report a false negative.
+static PROBE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Probes block cloning by actually cloning a small file inside `dir`
 /// (`clonefile` on macOS, `FICLONE` on Linux). True means `file_copy_method = clone`
 /// shares blocks between a template and its clones on this filesystem.
 pub fn supports_block_clone(dir: &Path) -> bool {
-    let src = dir.join(format!(".pgx-clone-probe-{}.src", std::process::id()));
-    let dst = dir.join(format!(".pgx-clone-probe-{}.dst", std::process::id()));
+    let uniq = format!(
+        "{}-{}",
+        std::process::id(),
+        PROBE_SEQ.fetch_add(1, Ordering::Relaxed)
+    );
+    let src = dir.join(format!(".pgx-clone-probe-{uniq}.src"));
+    let dst = dir.join(format!(".pgx-clone-probe-{uniq}.dst"));
     let _ = std::fs::remove_file(&dst);
     if std::fs::write(&src, b"pgx block clone probe").is_err() {
         return false;
@@ -87,9 +99,22 @@ pub fn fs_type_name(dir: &Path) -> String {
 mod tests {
     use super::*;
 
+    /// A private, unique subdirectory of the system temp dir. It lives on the
+    /// same filesystem as the temp dir (so clone-capability is identical) but
+    /// isolates each test's probe files from the other parallel tests.
+    fn isolated_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "pgx-fsdetect-{tag}-{}-{}",
+            std::process::id(),
+            PROBE_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
     #[test]
     fn probe_cleans_up() {
-        let dir = std::env::temp_dir();
+        let dir = isolated_dir("cleanup");
         let _ = supports_block_clone(&dir);
         let leftovers: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
@@ -100,14 +125,22 @@ mod tests {
                     .starts_with(".pgx-clone-probe")
             })
             .collect();
-        assert!(leftovers.is_empty(), "{leftovers:?}");
+        let empty = leftovers.is_empty();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(empty, "{leftovers:?}");
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn fsdetect_apfs_is_clone_capable() {
-        let dir = std::env::temp_dir();
-        assert_eq!(fs_type_name(&dir), "apfs");
-        assert!(supports_block_clone(&dir));
+        // The macOS system temp dir is APFS; a private subdirectory of it shares
+        // that filesystem, so this still proves the temp dir is clone-capable
+        // while isolating the probe from other parallel tests.
+        let dir = isolated_dir("apfs");
+        let fs = fs_type_name(&dir);
+        let ok = supports_block_clone(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(fs, "apfs");
+        assert!(ok);
     }
 }

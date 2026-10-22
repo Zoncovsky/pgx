@@ -147,11 +147,11 @@ fn init_with_run_dir_override_accepts_long_home() {
     let p = Pgx::with_home(long);
     let run_dir = common::scratch_root().join(format!("rd{}", p.port));
     let port = p.port.to_string();
-    let r = p
-        .cmd(&["init", "--port", &port])
-        .env("PGX_RUN_DIR", &run_dir)
-        .output()
-        .unwrap();
+    let r = common::output_locked(
+        p.cmd(&["init", "--port", &port])
+            .env("PGX_RUN_DIR", &run_dir),
+    )
+    .unwrap();
     let r = common::Run::from(r);
     assert_eq!(r.code, 0, "{}", r.all());
     assert_eq!(p.config()["run_dir"], run_dir.to_string_lossy().as_ref());
@@ -353,7 +353,7 @@ fn concurrent_start_single_server() {
     let handles: Vec<_> = (0..4)
         .map(|_| {
             let mut c = p.cmd(&["start"]);
-            std::thread::spawn(move || common::Run::from(c.output().unwrap()))
+            std::thread::spawn(move || common::Run::from(common::output_locked(&mut c).unwrap()))
         })
         .collect();
     let runs: Vec<common::Run> = handles.into_iter().map(|h| h.join().unwrap()).collect();
@@ -434,10 +434,7 @@ fn start_survives_cli_parent_exit_and_terminal_hangup() {
 fn serve_runs_in_foreground_and_initialises() {
     let p = Pgx::new();
     // No init: serve must create the cluster and run the engine in the foreground.
-    let mut child = p
-        .cmd(&["serve"])
-        .env("PGX_PORT", p.port.to_string())
-        .spawn()
+    let mut child = common::spawn_locked(p.cmd(&["serve"]).env("PGX_PORT", p.port.to_string()))
         .expect("spawn pgx serve");
     // wait for readiness
     let mut ready = false;
@@ -477,21 +474,22 @@ fn serve_runs_in_foreground_and_initialises() {
 fn init_honors_pgx_password_env() {
     let p = Pgx::new();
     let port = p.port.to_string();
-    let r = p
-        .cmd(&["init", "--port", &port])
-        .env("PGX_PASSWORD", "supersecret123")
-        .output()
-        .unwrap();
+    let r = common::output_locked(
+        p.cmd(&["init", "--port", &port])
+            .env("PGX_PASSWORD", "supersecret123"),
+    )
+    .unwrap();
     assert_eq!(common::Run::from(r).code, 0);
     assert_eq!(p.config()["password"], "supersecret123");
     // too short is rejected
     let p2 = Pgx::new();
     let port2 = p2.port.to_string();
     let r = common::Run::from(
-        p2.cmd(&["init", "--port", &port2])
-            .env("PGX_PASSWORD", "short")
-            .output()
-            .unwrap(),
+        common::output_locked(
+            p2.cmd(&["init", "--port", &port2])
+                .env("PGX_PASSWORD", "short"),
+        )
+        .unwrap(),
     );
     assert_eq!(r.code, 2, "{}", r.all());
     assert!(r.stderr.contains("too short"), "{}", r.stderr);
@@ -540,5 +538,55 @@ fn init_force_refuses_while_recorded_pid_is_alive() {
     assert!(
         !p.home.join("data/marker").exists(),
         "--force should have recreated the data dir"
+    );
+}
+
+/// A descriptor the CLI inherits without close-on-exec (what a caller's
+/// half-initialised pipe or socket looks like under a concurrent fork) must not
+/// survive into the detached engine or TTL supervisor. If it does, the caller's
+/// `output()` never sees EOF (observed hang) and a leaked listening socket
+/// keeps its port busy for as long as the engine lives (observed CI exit 4).
+#[test]
+fn start_does_not_leak_inherited_fds_into_engine_or_supervisor() {
+    use std::os::unix::process::CommandExt;
+    let p = Pgx::new();
+    p.init_ok();
+    let mut fds = [0i32; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    let (r, w) = (fds[0], fds[1]);
+    let mut c = p.cmd(&["start"]);
+    // dup2 clears FD_CLOEXEC on the target, so fd 200 is inherited by `pgx start`.
+    unsafe {
+        c.pre_exec(move || {
+            libc::dup2(w, 200);
+            Ok(())
+        });
+    }
+    let out = common::Run::from(common::output_locked(&mut c).unwrap());
+    assert_eq!(out.code, 0, "{}", out.all());
+    unsafe { libc::close(w) };
+    assert!(!p.engine_pids().is_empty(), "engine not running");
+    assert!(p.wait_supervisor(5), "supervisor not running");
+    // Only the parent's write end is closed above; EOF arrives iff no other
+    // process still holds fd 200 (or any dup of it).
+    let flags = unsafe { libc::fcntl(r, libc::F_GETFL) };
+    unsafe { libc::fcntl(r, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut buf = [0u8; 1];
+    let eof = loop {
+        let n = unsafe { libc::read(r, buf.as_mut_ptr() as *mut libc::c_void, 1) };
+        if n == 0 {
+            break true;
+        }
+        if std::time::Instant::now() > deadline {
+            break false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    unsafe { libc::close(r) };
+    assert!(
+        eof,
+        "a descriptor inherited by `pgx start` is still held open by the engine or the \
+         supervisor: inherited fds must be closed on exec in those children"
     );
 }

@@ -143,6 +143,39 @@ pub fn engine_args(home: &Home, cfg: &Config, sock_dir: &Path) -> Vec<String> {
     ]
 }
 
+/// Mark every descriptor above stderr close-on-exec, so a long-lived child
+/// (the engine, the TTL supervisor) never keeps a caller's pipes or sockets
+/// open. Everything pgx opens itself is already close-on-exec (std does that),
+/// so this only affects descriptors pgx inherited from its parent — which it
+/// has no business forwarding. Without it, a descriptor a parent is still
+/// initialising when it forks us (macOS has no atomic `pipe2`/`SOCK_CLOEXEC`)
+/// lives for as long as the engine does: the parent's `output()` never sees
+/// EOF, and a leaked listening socket keeps its port busy.
+///
+/// Async-signal-safe (only `fcntl`, `close_range`/`syscall`, `sysconf`):
+/// safe to call from `pre_exec`.
+pub(crate) unsafe fn cloexec_inherited_fds() {
+    #[cfg(target_os = "linux")]
+    {
+        // One syscall on Linux >= 5.11; falls through to the loop on older kernels.
+        if libc::syscall(
+            libc::SYS_close_range,
+            3 as libc::c_uint,
+            libc::c_uint::MAX,
+            libc::CLOSE_RANGE_CLOEXEC,
+        ) == 0
+        {
+            return;
+        }
+    }
+    // Descriptors cannot exceed the soft limit; the clamp only guards an
+    // absurd limit from turning this into a long loop.
+    let max = libc::sysconf(libc::_SC_OPEN_MAX).clamp(3, 1 << 22) as libc::c_int;
+    for fd in 3..max {
+        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+    }
+}
+
 /// Starts the engine detached (own session, stdio to the log file).
 pub fn spawn(
     install: &Install,
@@ -175,6 +208,7 @@ pub fn spawn(
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
+            cloexec_inherited_fds();
             let mut rl = libc::rlimit {
                 rlim_cur: 0,
                 rlim_max: 0,
@@ -432,5 +466,38 @@ mod tests {
             ["-D", "/h/.pgx/data", "-k", "/h/.pgx/run", "-p", "5455"]
         );
         assert!(a.contains(&"io_method=sync".to_string()));
+    }
+    #[test]
+    fn cloexec_inherited_fds_hides_a_leaked_descriptor_from_the_child() {
+        use std::os::unix::process::CommandExt;
+        // A pipe WITHOUT close-on-exec, as a half-initialised descriptor in a
+        // forking parent would be. The child tries to write to it.
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let (r, w) = (fds[0], fds[1]);
+        let probe = format!("echo leaked >&{w}");
+        let without = std::process::Command::new("/bin/sh")
+            .args(["-c", &probe])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(
+            without.success(),
+            "control: the child can use the inherited fd"
+        );
+        let mut c = std::process::Command::new("/bin/sh");
+        c.args(["-c", &probe]).stderr(std::process::Stdio::null());
+        unsafe {
+            c.pre_exec(|| {
+                cloexec_inherited_fds();
+                Ok(())
+            });
+        }
+        let with = c.status().unwrap();
+        assert!(!with.success(), "the inherited fd must be closed on exec");
+        unsafe {
+            libc::close(w);
+            libc::close(r);
+        }
     }
 }

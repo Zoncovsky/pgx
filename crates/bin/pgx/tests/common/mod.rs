@@ -8,8 +8,43 @@
 #![allow(dead_code)]
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard};
+
+/// Serialises descriptor creation with process spawning across test threads.
+///
+/// macOS has no `pipe2`/`SOCK_CLOEXEC`: std creates a pipe or socket and only
+/// then sets close-on-exec. A fork in another thread inside that window copies
+/// the half-initialised descriptor into an unrelated child, which then holds a
+/// test's stdout pipe (the parent's `output()` never sees EOF) or its port
+/// probe socket (`pgx init --port` fails with exit 4). The lock covers only the
+/// fd creation and the spawn, never the wait, so tests still run concurrently.
+static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
+fn spawn_guard() -> MutexGuard<'static, ()> {
+    SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `cmd.spawn()` under [`SPAWN_LOCK`]. Use this instead of calling `spawn`
+/// directly anywhere in these suites.
+pub fn spawn_locked(cmd: &mut Command) -> std::io::Result<Child> {
+    let _g = spawn_guard();
+    cmd.spawn()
+}
+
+/// `cmd.output()` with the spawn (and its pipe creation) under [`SPAWN_LOCK`];
+/// waiting for the child happens outside the lock.
+pub fn output_locked(cmd: &mut Command) -> std::io::Result<Output> {
+    let child = {
+        let _g = spawn_guard();
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+    };
+    child.wait_with_output()
+}
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 static PORT_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -49,7 +84,13 @@ pub fn free_port() -> u16 {
         let seq = PORT_SEQ.fetch_add(1, Ordering::SeqCst);
         let port = 20000 + ((offset + seq) % 40000);
         let port = port as u16;
-        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+        // Under SPAWN_LOCK: the probe socket must not be half-initialised
+        // (no close-on-exec yet) while another thread forks a child.
+        let free = {
+            let _g = spawn_guard();
+            TcpListener::bind(("127.0.0.1", port)).is_ok()
+        };
+        if free {
             return port;
         }
     }
@@ -161,7 +202,7 @@ impl Pgx {
     fn output_retrying(&self, make: impl Fn() -> Command, what: &str) -> Run {
         let mut last = None;
         for _ in 0..8 {
-            match make().output() {
+            match output_locked(&mut make()) {
                 Ok(o) => return Run::from(o),
                 Err(e) => {
                     last = Some(e);
@@ -201,13 +242,12 @@ impl Pgx {
     pub fn spawn_run(&self) -> std::process::Child {
         let mut last = None;
         for _ in 0..8 {
-            match self
-                .cmd(&["run"])
-                .env("PGX_PORT", self.port.to_string())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
+            match spawn_locked(
+                self.cmd(&["run"])
+                    .env("PGX_PORT", self.port.to_string())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null()),
+            ) {
                 Ok(c) => return c,
                 Err(e) => {
                     last = Some(e);
@@ -274,14 +314,12 @@ impl Pgx {
 
     /// Any `postgres` process whose command line names this home's data dir.
     pub fn engine_pids(&self) -> Vec<u32> {
-        let out = Command::new("pgrep")
-            .args([
-                "-f",
-                "--",
-                &format!("postgres .*-D {}( |$)", self.home.join("data").display()),
-            ])
-            .output()
-            .unwrap();
+        let out = output_locked(Command::new("pgrep").args([
+            "-f",
+            "--",
+            &format!("postgres .*-D {}( |$)", self.home.join("data").display()),
+        ]))
+        .unwrap();
         String::from_utf8_lossy(&out.stdout)
             .lines()
             .filter_map(|l| l.trim().parse().ok())
@@ -291,50 +329,48 @@ impl Pgx {
     /// Runs SQL through psql if available, else through `pgx`'s own client via a tiny helper.
     pub fn psql(&self, db: &str, sql: &str) -> Run {
         let psql = find_psql();
-        let out = Command::new(psql)
-            .args([
-                "-X",
-                "-q",
-                "-v",
-                "ON_ERROR_STOP=1",
-                "-h",
-                &self.sock_dir().to_string_lossy(),
-                "-p",
-                &self.port.to_string(),
-                "-U",
-                "postgres",
-                "-d",
-                db,
-                "-Atc",
-                sql,
-            ])
-            .output()
-            .expect("spawn psql");
+        let mut cmd = Command::new(psql);
+        cmd.args([
+            "-X",
+            "-q",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-h",
+            &self.sock_dir().to_string_lossy(),
+            "-p",
+            &self.port.to_string(),
+            "-U",
+            "postgres",
+            "-d",
+            db,
+            "-Atc",
+            sql,
+        ]);
+        let out = output_locked(&mut cmd).expect("spawn psql");
         Run::from(out)
     }
 
     pub fn psql_tcp(&self, db: &str, password: &str, sql: &str) -> Run {
         let psql = find_psql();
-        let out = Command::new(psql)
-            .args([
-                "-X",
-                "-q",
-                "-v",
-                "ON_ERROR_STOP=1",
-                "-h",
-                "127.0.0.1",
-                "-p",
-                &self.port.to_string(),
-                "-U",
-                "postgres",
-                "-d",
-                db,
-                "-Atc",
-                sql,
-            ])
-            .env("PGPASSWORD", password)
-            .output()
-            .expect("spawn psql");
+        let mut cmd = Command::new(psql);
+        cmd.args([
+            "-X",
+            "-q",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-h",
+            "127.0.0.1",
+            "-p",
+            &self.port.to_string(),
+            "-U",
+            "postgres",
+            "-d",
+            db,
+            "-Atc",
+            sql,
+        ])
+        .env("PGPASSWORD", password);
+        let out = output_locked(&mut cmd).expect("spawn psql");
         Run::from(out)
     }
 }
@@ -361,7 +397,7 @@ impl Drop for Pgx {
         if let Some(pid) = self.supervisor_pid() {
             unsafe { libc::kill(pid as i32, libc::SIGKILL) };
         }
-        let _ = self.cmd(&["stop", "--force"]).output();
+        let _ = output_locked(&mut self.cmd(&["stop", "--force"]));
         for pid in self.engine_pids() {
             unsafe { libc::kill(pid as i32, libc::SIGKILL) };
         }

@@ -1,0 +1,178 @@
+name: Publish npm package (pgxdb)
+# Publishes dist/npm as `pgxdb` to npm when a GitHub release is PUBLISHED (the
+# draft that release.yml creates is published by hand; that is the trigger).
+# The package version is stamped from the release tag, so `npx pgxdb@<v>`
+# always installs the PGX <v> tarballs from that release.
+#
+# Guards against an accidental or unapproved publish:
+#   - runs only in pgrundev/pgx (never in a fork);
+#   - the release must be published (not a draft) and its tag must be
+#     vX.Y.Z[-pre] on a commit that is on main;
+#   - every supported platform's assets must exist, the package tests must
+#     pass, and the packed tarball must run against the real release first;
+#   - the publish job runs in the `npm-publish` GitHub environment — configure
+#     required reviewers on it (Settings → Environments) for a human approval;
+#   - manual runs default to dry_run=true (pack + verify, no publish).
+#
+# Auth: npm trusted publishing (OIDC) when the `pgxdb` package has this
+# workflow configured as a trusted publisher on npmjs.com; otherwise the
+# NPM_TOKEN repository secret (needed for the very first publish of the name).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to publish (without the leading v; the GitHub release must already be published)
+        required: true
+      dry_run:
+        description: Pack and verify only, do not publish
+        type: boolean
+        default: true
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'pgrundev/pgx'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      dist_tag: ${{ steps.resolve.outputs.dist_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Resolve and validate the release
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -eu
+          tag="${RELEASE_TAG:-v${INPUT_VERSION#v}}"
+          version="${tag#v}"
+          echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
+            || { echo "::error::tag '$tag' is not vX.Y.Z[-pre]; refusing to publish" >&2; exit 1; }
+          json="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,targetCommitish)"
+          [ "$(echo "$json" | jq -r .isDraft)" = false ] \
+            || { echo "::error::release $tag is a draft; publish it on GitHub first" >&2; exit 1; }
+          sha="$(git rev-parse "refs/tags/$tag^{commit}")"
+          git fetch -q origin main
+          git merge-base --is-ancestor "$sha" origin/main \
+            || { echo "::error::tag $tag ($sha) is not on main; npm packages are published from main releases only" >&2; exit 1; }
+          prerelease="$(echo "$json" | jq -r .isPrerelease)"
+          dist_tag="$([ "$prerelease" = true ] && echo beta || echo latest)"
+          { echo "version=$version"; echo "tag=$tag"; echo "dist_tag=$dist_tag"; } >> "$GITHUB_OUTPUT"
+          echo "pgxdb@$version from release $tag ($sha, on main) -> dist-tag $dist_tag"
+      - name: Release assets must exist for every supported platform
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -eu
+          assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          echo "$assets"
+          for t in darwin-arm64 linux-amd64 linux-arm64; do
+            for f in "pgx-$VERSION-$t.tar.gz" "pgx-$VERSION-$t.tar.gz.sha256"; do
+              echo "$assets" | grep -qx "$f" || { echo "::error::release $TAG lacks $f" >&2; exit 1; }
+            done
+          done
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Stamp the package version from the release
+        working-directory: dist/npm
+        env: { VERSION: "${{ steps.resolve.outputs.version }}" }
+        run: |
+          npm version "$VERSION" --no-git-tag-version
+          cp ../../LICENSE .
+      - name: Package tests
+        working-directory: dist/npm
+        run: npm test
+      - name: Pack, then smoke the packed tarball against the real release (download, run, stop)
+        working-directory: dist/npm
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          PGX_HOME: ${{ runner.temp }}/pgx-home
+          PGX_INSTALL_DIR: ${{ runner.temp }}/pgx-dist
+        run: |
+          set -eu
+          npm pack
+          mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
+          npm init -y >/dev/null && npm install "$GITHUB_WORKSPACE/dist/npm/pgxdb-$VERSION.tgz"
+          npx pgxdb | tee run.out
+          grep -q "PGX is ready" run.out
+          npx pgxdb --json ls | grep -q '"app"'
+          npx pgxdb version | grep -q "$VERSION"
+          npx pgxdb stop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pgxdb-package
+          path: dist/npm/pgxdb-*.tgz
+
+  publish:
+    needs: verify
+    if: github.repository == 'pgrundev/pgx' && github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-24.04
+    # Human approval gate: add required reviewers to this environment in
+    # Settings → Environments → npm-publish. The job waits for them.
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: pgxdb-package, path: pkg }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@latest && npm --version
+      - name: Publish exactly the verified tarball
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ needs.verify.outputs.dist_tag }}
+        run: |
+          set -eu
+          # With trusted publishing configured, NODE_AUTH_TOKEN is empty and npm
+          # uses OIDC; setup-node's .npmrc line must then not force a token.
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then unset NODE_AUTH_TOKEN; sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG"; fi
+          npm publish pkg/pgxdb-*.tgz --provenance --access public --tag "$DIST_TAG"
+
+  verify-clean-machine:
+    # After a real publish: `npx pgxdb@<version>` from the registry on a clean
+    # ubuntu:24.04 container with NO PostgreSQL and NO Docker, as an
+    # unprivileged user — what a new developer's machine looks like.
+    needs: [verify, publish]
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - name: Clean base — Node.js only (no postgres, no docker)
+        run: |
+          set -eu
+          apt-get update
+          apt-get install -y --no-install-recommends nodejs npm ca-certificates procps
+          if command -v postgres || command -v initdb || command -v psql || command -v docker; then
+            echo "::error::this is not a clean machine" >&2; exit 1; fi
+          useradd -m -u 10001 fresh
+      - name: npx pgxdb@$VERSION as a fresh unprivileged user
+        run: |
+          set -eu
+          # Wait for the registry to serve the new version (propagation delay).
+          for i in $(seq 1 30); do
+            if npm view "pgxdb@$VERSION" version >/dev/null 2>&1; then break; fi
+            [ "$i" = 30 ] && { echo "::error::pgxdb@$VERSION not visible on npm after 5 minutes" >&2; exit 1; }
+            sleep 10
+          done
+          runuser -u fresh -- sh -c "
+            set -eu; cd ~
+            npx -y pgxdb@$VERSION | tee run.out
+            grep -q 'PGX is ready' run.out
+            npx -y pgxdb@$VERSION --json ls | grep -q '\"app\"'
+            npx -y pgxdb@$VERSION version | grep -q '$VERSION'
+            npx -y pgxdb@$VERSION stop
+          "

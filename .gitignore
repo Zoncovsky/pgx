@@ -56,3 +56,8 @@ __pycache__/
 # black-box suite logs and scratch clusters (key artifacts are copied to docs/pgx/local-dev/validation/)
 tests/results/
 dist/pgx.dev/.wrangler/
+
+# npm wrapper (dist/npm): installed deps, packed tarballs, LICENSE copied at publish time
+dist/npm/node_modules/
+dist/npm/*.tgz
+dist/npm/LICENSE

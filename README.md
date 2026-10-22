@@ -13,12 +13,11 @@
 </p>
 
 ```bash
-curl -fsSL https://pgx.dev/install | sh
-pgx run
-pgx clone app agent-001 --ttl 5m
+npx pgxdb@latest
 ```
 
 <p align="center">
+  One command: PGX installed, database running, connection URL printed.<br>
   No Docker required · Native Mac &amp; Linux · Automatic cleanup
 </p>
 
@@ -320,17 +319,40 @@ branch management. PGX is the runtime. They are separate projects.
 
 ## Quickstart
 
-Install PGX and create your first database. No system PostgreSQL required; the
-distribution is self-contained and relocatable.
+One command installs PGX, starts it, creates an `app` database and prints its
+connection URL. No Docker, Rust or system PostgreSQL; the native distribution
+is self-contained and relocatable.
+
+```bash
+npx pgxdb@latest
+```
+
+```console
+PGX is ready.
+
+  postgres://postgres:…@127.0.0.1:5432/app
+```
+
+Point `DATABASE_URL` at that URL. `npx pgxdb` with no arguments is `pgx run`;
+every other `pgx` command works the same way through npx:
+
+```bash
+npx pgxdb url app                      # its connection URL
+npx pgxdb ls                           # databases, TTL, expiry, size
+npx pgxdb clone app agent-001 --ttl 5m # a 5-minute copy-on-write branch
+npx pgxdb --json ls                    # machine-readable output for agents
+npx pgxdb stop
+```
+
+The binary is downloaded once (SHA-256 verified) into `~/.pgx/dist/<version>`
+and reused. `npm install -g pgxdb` puts `pgx` on your PATH for good. Supported:
+Apple silicon Macs and Linux (arm64, x86-64). Intel Macs are not supported yet.
+
+Without Node, the shell installer does the same install:
 
 ```bash
 curl -fsSL https://pgx.dev/install | sh
-
-pgx run              # start the runtime with a ready `app` database
-pgx url app          # its connection URL — point DATABASE_URL at this
-pgx ls               # databases, TTL, expiry, memory
-pgx clone app test_1 # fast clone (copy-on-write where the backend supports it)
-pgx stop
+pgx run
 ```
 
 Any PostgreSQL client or ORM works against `pgx url <db>`. The full CLI,

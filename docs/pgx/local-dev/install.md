@@ -5,7 +5,28 @@ PostgreSQL**; the only runtime dependencies are libc and, for XML and ICU
 collations, the host's libxml2 and ICU (present by default on macOS and in the
 Docker image).
 
-## One-line install
+## One command with npm
+
+```sh
+npx pgxdb@latest
+```
+
+`pgxdb` is a small npm wrapper around the `pgx` CLI (source: `dist/npm/`). It
+downloads the release tarball for your OS and CPU into `~/.pgx/dist/<version>`
+(the same place the shell installer uses), **verifies the checksum**, and then
+runs `pgx run`: initialise if needed, start, ensure the `app` database, print
+its URL. Any arguments are passed to `pgx` unchanged (`npx pgxdb ls`,
+`npx pgxdb --json url app`, …). The download happens once per version; later
+runs start in well under a second.
+
+`pgxdb@X.Y.Z` installs PGX `X.Y.Z`, so `@latest` is the latest PGX release.
+`PGX_VERSION`, `PGX_INSTALL_DIR` and `PGX_BASE_URL` override the version,
+cache directory and download base. `npm install -g pgxdb` provides both
+`pgxdb` and `pgx` on your PATH. Node.js 18+ is required. Supported: Apple
+silicon Macs and Linux (arm64, x86-64); Intel Macs and Windows are not
+supported (see the platform table below).
+
+## One-line install (shell)
 
 ```sh
 curl -fsSL https://pgx.dev/install | sh
@@ -63,4 +84,5 @@ See the repository README "Quickstart → Build": the Rust toolchain (pinned by
 | macOS arm64 (Apple silicon) | supported, verified |
 | Linux arm64 | supported, verified |
 | Linux x86-64 | supported, built and smoke-tested in CI |
+| macOS x86-64 (Intel) | **not supported yet**: no binary is published. `npx pgxdb` and the shell installer both refuse with a clear message. The release workflow has an experimental, non-blocking Intel build leg whose artifact is kept out of releases until it has been validated |
 | Windows | not supported |

@@ -142,7 +142,8 @@ fn drop_in_use_requires_force() {
         0
     );
     // Hold a session open on the database.
-    let mut holder = std::process::Command::new(common::find_psql())
+    let mut holder_cmd = std::process::Command::new(common::find_psql());
+    holder_cmd
         .args([
             "-X",
             "-h",
@@ -157,9 +158,8 @@ fn drop_in_use_requires_force() {
             "SELECT pg_sleep(30)",
         ])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
+        .stderr(std::process::Stdio::null());
+    let mut holder = common::spawn_locked(&mut holder_cmd).unwrap();
     // wait until the session is visible
     for _ in 0..100 {
         if p.psql(
@@ -216,10 +216,13 @@ fn url_has_password_and_port() {
         )
     );
     // The URL works with a real client.
-    let out = std::process::Command::new(common::find_psql())
-        .args(["-X", "-Atc", "SELECT current_database()", &url])
-        .output()
-        .unwrap();
+    let out = common::output_locked(std::process::Command::new(common::find_psql()).args([
+        "-X",
+        "-Atc",
+        "SELECT current_database()",
+        &url,
+    ]))
+    .unwrap();
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).trim(),
         "app",
@@ -230,10 +233,13 @@ fn url_has_password_and_port() {
     assert_eq!(r.code, 0, "{}", r.all());
     let surl = r.stdout.trim().to_string();
     assert!(surl.starts_with("postgres://postgres@/app?host="), "{surl}");
-    let out = std::process::Command::new(common::find_psql())
-        .args(["-X", "-Atc", "SELECT current_database()", &surl])
-        .output()
-        .unwrap();
+    let out = common::output_locked(std::process::Command::new(common::find_psql()).args([
+        "-X",
+        "-Atc",
+        "SELECT current_database()",
+        &surl,
+    ]))
+    .unwrap();
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).trim(),
         "app",

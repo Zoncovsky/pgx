@@ -81,7 +81,8 @@ fn clone_json_reports_method_and_timing() {
 #[test]
 fn clone_source_in_use_is_exit_6() {
     let p = up_with_source();
-    let mut holder = std::process::Command::new(common::find_psql())
+    let mut holder_cmd = std::process::Command::new(common::find_psql());
+    holder_cmd
         .args([
             "-X",
             "-h",
@@ -96,9 +97,8 @@ fn clone_source_in_use_is_exit_6() {
             "BEGIN; INSERT INTO t VALUES (50000, 'uncommitted'); SELECT pg_sleep(20)",
         ])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
+        .stderr(std::process::Stdio::null());
+    let mut holder = common::spawn_locked(&mut holder_cmd).unwrap();
     for _ in 0..200 {
         if p.psql(
             "postgres",
@@ -176,7 +176,12 @@ fn concurrent_clones_8() {
         .map(|i| {
             let name = format!("cc{i}");
             let mut c = p.cmd(&["--json", "clone", "src", &name]);
-            std::thread::spawn(move || (name, common::Run::from(c.output().unwrap())))
+            std::thread::spawn(move || {
+                (
+                    name,
+                    common::Run::from(common::output_locked(&mut c).unwrap()),
+                )
+            })
         })
         .collect();
     let mut names = Vec::new();

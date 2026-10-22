@@ -208,10 +208,13 @@ pub fn spawn_supervisor(home: &crate::layout::Home) {
             cmd.stdout(Stdio::null()).stderr(Stdio::null());
         }
     }
-    // SAFETY: setsid() in the child only; no allocation or shared-state access.
+    // SAFETY: setsid() and fcntl() in the child only; no allocation or
+    // shared-state access. Inherited descriptors are dropped at exec so the
+    // supervisor never pins a caller's pipe or socket open.
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
+            crate::process::cloexec_inherited_fds();
             Ok(())
         });
     }
@@ -308,6 +311,9 @@ fn exec_engine_foreground(
             unsafe { libc::setrlimit(libc::RLIMIT_STACK, &rl) };
         }
     }
+    // Same hygiene as the detached engine: nothing we inherited goes on to the
+    // engine (our own descriptors are already close-on-exec).
+    unsafe { crate::process::cloexec_inherited_fds() };
     let err = std::process::Command::new(&install.engine)
         .args(crate::process::engine_args(home, cfg, sock_dir))
         .envs(crate::process::engine_env(install))

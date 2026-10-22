@@ -37,11 +37,12 @@ function makeTarball(root, version, target) {
 }
 
 /** Serve files from `dir` under /v<version>/; count requests per path. */
-function startServer(dir) {
+function startServer(dir, { connectionClose = false } = {}) {
   const hits = {};
   const overrides = {};
   const server = http.createServer((req, res) => {
     hits[req.url] = (hits[req.url] || 0) + 1;
+    if (connectionClose) res.setHeader('connection', 'close');
     if (overrides[req.url] !== undefined) {
       res.writeHead(200);
       res.end(overrides[req.url]);
@@ -60,6 +61,17 @@ function startServer(dir) {
     server.listen(0, '127.0.0.1', () => {
       resolve({ server, hits, overrides, url: `http://127.0.0.1:${server.address().port}` });
     });
+  });
+}
+
+/** A server that answers every request with a redirect to `location(req)`. */
+function startRedirector(location) {
+  const server = http.createServer((req, res) => {
+    res.writeHead(302, { location: location(req) });
+    res.end();
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` }));
   });
 }
 
@@ -169,5 +181,37 @@ test('pgxdb end to end', async (t) => {
     assert.equal(r.status, 1);
     assert.match(r.stderr, /^pgxdb: download failed: http:\/\/127\.0\.0\.1:1\//m);
     assert.doesNotMatch(r.stderr, /at .*\.js:\d+/);
+  });
+  await t.test('redirects are followed to a server that closes every connection (GitHub release assets)', async () => {
+    // github.com answers release downloads with a 302 to a CDN host; the CDN
+    // (and python -m http.server in dist/test/npm_test.sh) closes the
+    // connection after each response. Both must work for the tarball and the
+    // checksum.
+    const cdn = await startServer(path.join(tmp, 'srv'), { connectionClose: true });
+    const front = await startRedirector((req) => `${cdn.url}${req.url}`);
+    try {
+      const home2 = path.join(tmp, 'home-redirect');
+      const r = await runPgxdb(['version'], { ...env, HOME: home2, PGX_BASE_URL: front.url });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /^fake-pgx args: version\n$/);
+      assert.equal(cdn.hits[tgzPath], 1, 'tarball fetched from the redirect target');
+      assert.equal(cdn.hits[`${tgzPath}.sha256`], 1, 'checksum fetched from the redirect target');
+      assert.ok(platform.isValidInstall(path.join(home2, '.pgx', 'dist', VERSION), VERSION));
+    } finally {
+      cdn.server.close();
+      front.server.close();
+    }
+  });
+
+  await t.test('a redirect loop is reported as too many redirects', async () => {
+    const loop = await startRedirector((req) => req.url);
+    try {
+      const r = await runPgxdb(['version'], { ...env, PGX_BASE_URL: loop.url, PGX_VERSION: '0.0.0-loop' });
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /^pgxdb: download failed: .*pgx-0\.0\.0-loop-.*\.tar\.gz: too many redirects$/m);
+      assert.doesNotMatch(r.stderr, /at .*\.js:\d+/);
+    } finally {
+      loop.server.close();
+    }
   });
 });

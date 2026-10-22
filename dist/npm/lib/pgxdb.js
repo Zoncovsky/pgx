@@ -12,11 +12,12 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
+const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { pipeline } = require('node:stream/promises');
-const { Readable } = require('node:stream');
 
 const REPO = 'pgrundev/pgx';
 const DEFAULT_BASE_URL = `https://github.com/${REPO}/releases/download`;
@@ -93,37 +94,89 @@ function missingAssetMessage(target, version, url, status) {
   return msg;
 }
 
-async function download(url, dest, { onProgress, onHttpError } = {}) {
+/**
+ * GET `url` with Node's core http/https client, following up to `maxRedirects`
+ * redirects (github.com answers release downloads with a 302 to a CDN host).
+ * Resolves with the final response stream; the caller checks the status.
+ *
+ * Not `fetch`: Node's bundled undici can crash the process
+ * (`assert(!this.paused)`) when a server closes the connection while the
+ * body stream is under backpressure, which CDNs and simple HTTP/1.0 servers
+ * do after every response. The core client has no such path.
+ */
+function httpGet(url, maxRedirects = 10) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try {
+      u = new URL(url);
+    } catch (e) {
+      reject(new Error(`invalid URL: ${e.message}`));
+      return;
+    }
+    const client = u.protocol === 'https:' ? https : u.protocol === 'http:' ? http : null;
+    if (!client) {
+      reject(new Error(`unsupported URL scheme ${u.protocol}`));
+      return;
+    }
+    const headers = { 'user-agent': `pgxdb/${PKG.version} node/${process.version}`, accept: '*/*' };
+    const req = client.get(u, { headers }, (res) => {
+      const { statusCode, headers: h } = res;
+      if ([301, 302, 303, 307, 308].includes(statusCode) && h.location) {
+        res.resume(); // discard the redirect body
+        if (maxRedirects === 0) {
+          reject(new Error('too many redirects'));
+          return;
+        }
+        resolve(httpGet(new URL(h.location, u).href, maxRedirects - 1));
+        return;
+      }
+      resolve(res);
+    });
+    req.on('error', reject);
+  });
+}
+
+/** GET `url`; rejects with a PgxdbError on a network error or a non-2xx status. */
+async function getOk(url, onHttpError) {
   let res;
   try {
-    res = await fetch(url, { redirect: 'follow' });
+    res = await httpGet(url);
   } catch (e) {
-    throw new PgxdbError(`download failed: ${url}: ${e.cause?.message || e.message}`);
+    throw new PgxdbError(`download failed: ${url}: ${e.message}`);
   }
-  if (!res.ok) {
-    throw new PgxdbError(onHttpError ? onHttpError(res.status) : `download failed: ${url}: HTTP ${res.status}`);
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    res.resume();
+    throw new PgxdbError(onHttpError ? onHttpError(res.statusCode) : `download failed: ${url}: HTTP ${res.statusCode}`);
   }
-  const total = Number(res.headers.get('content-length')) || 0;
+  return res;
+}
+
+async function download(url, dest, { onProgress, onHttpError } = {}) {
+  const res = await getOk(url, onHttpError);
+  const total = Number(res.headers['content-length']) || 0;
   let received = 0;
-  const body = Readable.fromWeb(res.body);
   if (onProgress) {
-    body.on('data', (chunk) => {
+    res.on('data', (chunk) => {
       received += chunk.length;
       onProgress(received, total);
     });
   }
-  await pipeline(body, fs.createWriteStream(dest));
+  try {
+    await pipeline(res, fs.createWriteStream(dest));
+  } catch (e) {
+    throw new PgxdbError(`download failed: ${url}: ${e.message}`);
+  }
 }
 
 async function fetchText(url) {
-  let res;
+  const res = await getOk(url);
+  const chunks = [];
   try {
-    res = await fetch(url, { redirect: 'follow' });
+    for await (const chunk of res) chunks.push(chunk);
   } catch (e) {
-    throw new PgxdbError(`download failed: ${url}: ${e.cause?.message || e.message}`);
+    throw new PgxdbError(`download failed: ${url}: ${e.message}`);
   }
-  if (!res.ok) throw new PgxdbError(`download failed: ${url}: HTTP ${res.status}`);
-  return res.text();
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 function sha256File(file) {

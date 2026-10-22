@@ -27,7 +27,7 @@ touched.
 - No rewrite or vendoring of the engine; no per-platform npm packages (the
   tarballs are ~30 MB each; downloading one on first use is cheaper for
   `npx` than installing four optional dependencies).
-- No proxy configuration layer (Node's `fetch` is used as-is).
+- No proxy configuration layer (Node's core `http`/`https` client is used as-is; not `fetch`, whose bundled undici can abort the process when a CDN closes the connection mid-stream).
 - No Windows support (PGX has none).
 
 ## Decisions (made by the implementer, open to change)

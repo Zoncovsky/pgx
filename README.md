@@ -8,7 +8,7 @@
 <p align="center">
   <img alt="Postgres 18.6" src="https://img.shields.io/badge/Postgres-18.6-336791">
   <img alt="Version: v0.1" src="https://img.shields.io/badge/version-v0.1-blue">
-  <img alt="Regression suite: 223 of 231 byte-exact" src="https://img.shields.io/badge/regression_suite-223%2F231_byte--exact-green">
+  <img alt="PostgreSQL regression suite: 219 of 231 byte-exact, 0 result differences" src="https://img.shields.io/badge/src%2Ftest%2Fregress-219%2F231_byte--exact%2C_0_result_diffs-green">
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
 </p>
 
@@ -23,7 +23,7 @@ pgx clone app agent-001 --ttl 5m
 </p>
 
 <p align="center">
-  <sub>Open source · Free · v0.1.0 · Built for disposable development databases</sub>
+  <sub>Open source · Free · v0.1.0 · For disposable databases, not production data</sub>
 </p>
 
 PGX is a database runtime for short-lived Postgres databases: agent
@@ -81,12 +81,14 @@ different.
 ~674 ms      copy-on-write branch ready
 ~13.6 MB     initial additional physical storage
 
-223 / 231    PostgreSQL regression tests byte-exact
-2            tests with result differences (6 more differ in EXPLAIN text only)
+219 / 231    PostgreSQL src/test/regress byte-exact against PG 18.6 expected output
+0            result differences (the other 12 differ in EXPLAIN plan text only)
 ```
 
 These describe measured configurations and workloads, not a claim that
-PGX is faster than PostgreSQL in general. The detail and the scripts are
+PGX is faster than PostgreSQL in general. The regression figure is
+PostgreSQL's own test suite on one platform under the regress profile
+(see Benchmarks), not a compatibility percentage for arbitrary SQL. The detail and the scripts are
 under Benchmarks.
 
 ## Disposable Postgres
@@ -175,7 +177,7 @@ hundreds of times less physical storage than a full copy.
 
 | | Result |
 |---|---|
-| PostgreSQL regression suite | 223 / 231 byte-exact (nightly, 2026-10-21). 6 differ only in EXPLAIN plan text; **2 have result differences** (`select_parallel`: parallel-worker context lines and one boolean; `stats`: one boolean), tracked in [#17](https://github.com/pgrundev/pgx/issues/17). |
+| PostgreSQL regression suite (`src/test/regress`, PG 18.6 expected output) | 219 / 231 byte-exact; 12 differ only in EXPLAIN plan text; **0 result differences**. Measured under the PGX profile with parallel workers and `synchronous_commit` restored (`configs/pgx-regress-overlay.conf`), the two settings the suite asserts on; under the shipped ephemeral profile those two settings alone make `select_parallel` and `stats` differ. One suite, one platform: not a compatibility score. |
 | Real Rails 8.1 app (migrations, fixtures, model tests, schema change, `db:schema:load`) | passes; within 0–5 % of PostgreSQL 18 per phase |
 | Django 5.2, Prisma 6, SQLAlchemy 2, node-postgres, Rails-shaped SQL | pass |
 | All framework runs | **36 / 36** |
@@ -446,8 +448,11 @@ every headline number above to its step, script and raw result.
 
 The regression suite is PostgreSQL's own `src/test/regress`, vendored
 unmodified at `crates/postgres-18.6-reference/src/test/regress`. It runs
-with stock `pg_regress` (`benchmarks/pgx/regress-baseline.py`), and each
-difference is classified as plan-only or semantic.
+with stock `pg_regress` (`benchmarks/pgx/regress-baseline.py`) under the
+PGX profile plus `configs/pgx-regress-overlay.conf` (parallel workers and
+`synchronous_commit` back on, because the suite asserts on them), and each
+difference is classified as plan-only or semantic. The nightly run fails on
+any semantic difference (`classify-regress-diffs.py --fail-on-semantic`).
 
 ## Documentation
 

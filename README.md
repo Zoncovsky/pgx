@@ -8,7 +8,7 @@
 <p align="center">
   <img alt="Postgres 18.6" src="https://img.shields.io/badge/Postgres-18.6-336791">
   <img alt="Version: v0.1" src="https://img.shields.io/badge/version-v0.1-blue">
-  <img alt="Regression suite: 0 result differences" src="https://img.shields.io/badge/regression_suite-0_result_differences-brightgreen">
+  <img alt="Regression suite: 223 of 231 byte-exact" src="https://img.shields.io/badge/regression_suite-223%2F231_byte--exact-green">
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
 </p>
 
@@ -23,7 +23,7 @@ pgx clone app agent-001 --ttl 5m
 </p>
 
 <p align="center">
-  <sub>Open source · Free · Beta · Built for disposable development databases</sub>
+  <sub>Open source · Free · v0.1.0 · Built for disposable development databases</sub>
 </p>
 
 PGX is a database runtime for short-lived Postgres databases: agent
@@ -81,8 +81,8 @@ different.
 ~674 ms      copy-on-write branch ready
 ~13.6 MB     initial additional physical storage
 
-219 / 231    PostgreSQL regression tests byte-exact
-0            result differences (the other 12 differ in EXPLAIN text only)
+223 / 231    PostgreSQL regression tests byte-exact
+2            tests with result differences (6 more differ in EXPLAIN text only)
 ```
 
 These describe measured configurations and workloads, not a claim that
@@ -175,7 +175,7 @@ hundreds of times less physical storage than a full copy.
 
 | | Result |
 |---|---|
-| PostgreSQL regression suite | 219 / 231 byte-exact. The other 12 differ only in EXPLAIN plan text: **0 result differences**. |
+| PostgreSQL regression suite | 223 / 231 byte-exact (nightly, 2026-10-21). 6 differ only in EXPLAIN plan text; **2 have result differences** (`select_parallel`: parallel-worker context lines and one boolean; `stats`: one boolean), tracked in [#17](https://github.com/pgrundev/pgx/issues/17). |
 | Real Rails 8.1 app (migrations, fixtures, model tests, schema change, `db:schema:load`) | passes; within 0–5 % of PostgreSQL 18 per phase |
 | Django 5.2, Prisma 6, SQLAlchemy 2, node-postgres, Rails-shaped SQL | pass |
 | All framework runs | **36 / 36** |
@@ -266,8 +266,9 @@ applies to memory and to storage alike.
 
 ## Status
 
-PGX is **beta software**. It already powers PGX branches in PGRun's
-friendly beta. The current focus is PostgreSQL compatibility,
+PGX is at **v0.1.0**, an early release with known limitations listed in the
+[release notes](https://github.com/pgrundev/pgx/releases/tag/v0.1.0). It
+already powers PGX branches in PGRun. The current focus is PostgreSQL compatibility,
 Rails/application compatibility, concurrency semantics, lifecycle
 correctness, predictable resource containment and real agent workloads.
 Correctness and reproducibility come before benchmark marketing: if PGX

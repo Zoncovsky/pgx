@@ -40,7 +40,10 @@ def plan_lines(path):
 
 
 def main():
-    outdir = sys.argv[1]
+    # --fail-on-semantic: exit 1 when any test has a result (non-plan) difference,
+    # so the nightly gate cannot pass green over a real divergence.
+    fail_on_semantic = "--fail-on-semantic" in sys.argv[1:]
+    outdir = next(a for a in sys.argv[1:] if not a.startswith("--"))
     tests, cur = {}, None
     diffs = os.path.join(outdir, "regression.diffs")
     with open(diffs if os.path.exists(diffs) else os.devnull, errors="replace") as f:
@@ -82,6 +85,10 @@ def main():
                    "semantic": sorted(n for n, t in tests.items() if t["class"] == "semantic"),
                    "tests": tests}, f, indent=2)
         f.write("\n")
+    semantic = sorted(n for n, t in tests.items() if t["class"] == "semantic")
+    if fail_on_semantic and semantic:
+        print("FAIL: %d test(s) with result differences: %s" % (len(semantic), ", ".join(semantic)))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

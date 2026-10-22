@@ -85,7 +85,9 @@ jobs:
         working-directory: dist/npm
         env: { VERSION: "${{ steps.resolve.outputs.version }}" }
         run: |
-          npm version "$VERSION" --no-git-tag-version
+          # --allow-same-version: package.json already carries the release version
+          # when it was bumped before tagging; npm otherwise exits 1 ("Version not changed").
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
           cp ../../LICENSE .
       - name: Package tests
         working-directory: dist/npm

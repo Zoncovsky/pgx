@@ -141,7 +141,9 @@ jobs:
           # With trusted publishing configured, NODE_AUTH_TOKEN is empty and npm
           # uses OIDC; setup-node's .npmrc line must then not force a token.
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then unset NODE_AUTH_TOKEN; sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG"; fi
-          npm publish pkg/pgxdb-*.tgz --provenance --access public --tag "$DIST_TAG"
+          # ./ is required: a bare "pkg/pgxdb-0.1.0.tgz" is parsed by npm as the
+          # GitHub shorthand github:pkg/pgxdb-0.1.0.tgz (EALLOWGIT on npm >= 11.8).
+          npm publish ./pkg/pgxdb-*.tgz --provenance --access public --tag "$DIST_TAG"
 
   verify-clean-machine:
     # After a real publish: `npx pgxdb@<version>` from the registry on a clean

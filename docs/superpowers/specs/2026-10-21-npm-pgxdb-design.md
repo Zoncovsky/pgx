@@ -55,7 +55,13 @@ touched.
   from the tag, runs the package tests, and publishes with provenance.
   Prereleases are published under the `beta` dist-tag so `@latest` stays
   stable. Auth: npm trusted publishing (OIDC) when configured; `NPM_TOKEN`
-  secret as a fallback (needed for the very first publish of a new name).
+  secret as a fallback. The very first publish of the name goes through npm
+  staged publishing (`workflow_dispatch` with `stage=true` and a stage-only
+  granular token): npm cannot configure a trusted publisher for a package
+  that does not exist, and bypass-2FA tokens are deprecated (direct publish
+  with them ends around January 2027). A maintainer approves the staged
+  version on npmjs.com with 2FA; after that, trusted publishing is configured
+  for the package and the token deleted.
   See the next-but-one bullet for the approval gates.
 - **macOS x64 (Intel): not supported yet.** No binary is published. The
   wrapper maps `darwin/x64` to `darwin-amd64` and, when the asset is missing,

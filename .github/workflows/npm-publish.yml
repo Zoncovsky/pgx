@@ -25,6 +25,13 @@ name: Publish npm package (pgxdb)
 # creates the package and queues the version; a maintainer approves it on
 # npmjs.com (Staged Packages tab, 2FA) and only then does it go live. Then
 # configure trusted publishing for later releases and delete the token.
+#
+# Staging is the DEFAULT (release-triggered runs and manual runs alike): the
+# trusted publisher for pgxdb allows `npm stage publish` only, so every
+# release gets two human gates — the GitHub environment approval and the
+# maintainer's 2FA approval on npmjs.com. Direct `npm publish` needs an
+# explicit manual dispatch with stage=false (and a trusted publisher that
+# allows it).
 on:
   release:
     types: [published]
@@ -38,9 +45,9 @@ on:
         type: boolean
         default: true
       stage:
-        description: "Stage for maintainer approval on npmjs.com (npm stage publish) instead of publishing directly; required for the first publish of the name (stage-only token)"
+        description: "Stage for maintainer approval on npmjs.com (npm stage publish). Default. Set to false for a direct npm publish (needs a trusted publisher that allows it)."
         type: boolean
-        default: false
+        default: true
       registry_check:
         description: Also run the clean-machine check of this version from the registry (use with dry_run after a staged version was approved)
         type: boolean
@@ -160,7 +167,8 @@ jobs:
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then unset NODE_AUTH_TOKEN; sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG"; fi
           # ./ is required: a bare "pkg/pgxdb-0.1.0.tgz" is parsed by npm as the
           # GitHub shorthand github:pkg/pgxdb-0.1.0.tgz (EALLOWGIT on npm >= 11.8).
-          if [ "${STAGE:-false}" = true ]; then
+          # Release-triggered runs have no inputs (STAGE empty): they stage.
+          if [ "${STAGE:-true}" != false ]; then
             # Queued for approval on npmjs.com; nothing is installable until a
             # maintainer approves with 2FA. Creates the package if it is new.
             npm stage publish ./pkg/pgxdb-*.tgz --access public --tag "$DIST_TAG"
@@ -176,7 +184,7 @@ jobs:
     # Not after a staged publish (nothing is installable until approval); run
     # it afterwards with dry_run=true registry_check=true.
     needs: [verify, publish]
-    if: always() && needs.verify.result == 'success' && ((needs.publish.result == 'success' && github.event.inputs.stage != 'true') || github.event.inputs.registry_check == 'true')
+    if: always() && needs.verify.result == 'success' && ((needs.publish.result == 'success' && github.event.inputs.stage == 'false') || github.event.inputs.registry_check == 'true')
     runs-on: ubuntu-24.04
     container: ubuntu:24.04
     env:

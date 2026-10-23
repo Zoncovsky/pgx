@@ -61,7 +61,11 @@ touched.
   that does not exist, and bypass-2FA tokens are deprecated (direct publish
   with them ends around January 2027). A maintainer approves the staged
   version on npmjs.com with 2FA; after that, trusted publishing is configured
-  for the package and the token deleted.
+  for the package and the token deleted. Staging stays the default for every
+  release (the trusted publisher allows `npm stage publish` only), so each
+  release has two human gates: the GitHub environment approval and the
+  maintainer's 2FA approval on npmjs.com. Direct publish is an explicit
+  manual dispatch with `stage=false`.
   See the next-but-one bullet for the approval gates.
 - **macOS x64 (Intel): not supported yet.** No binary is published. The
   wrapper maps `darwin/x64` to `darwin-amd64` and, when the asset is missing,

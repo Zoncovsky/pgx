@@ -24,10 +24,13 @@ extern "C" fn on_signal(_sig: libc::c_int) {
 /// exit cleanly. The terminal still delivers SIGINT to the children (same
 /// process group); they exit on their own.
 pub fn install_interrupt_handler() {
+    // A function pointer cast through `*const ()`, as rustc's
+    // `function_casts_as_integer` lint asks for.
+    let handler = on_signal as *const () as libc::sighandler_t;
     unsafe {
-        libc::signal(libc::SIGINT, on_signal as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, on_signal as libc::sighandler_t);
-        libc::signal(libc::SIGHUP, on_signal as libc::sighandler_t);
+        libc::signal(libc::SIGINT, handler);
+        libc::signal(libc::SIGTERM, handler);
+        libc::signal(libc::SIGHUP, handler);
     }
 }
 

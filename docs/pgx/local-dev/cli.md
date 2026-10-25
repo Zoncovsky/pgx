@@ -46,6 +46,12 @@ Connect:
 | `pgx ttl <db> [<dur>\|unlimited]` | Show a database's TTL, or set/extend/disable it. See [ttl.md](ttl.md). |
 | `pgx url <db> [--socket]` | Print the connection URL (TCP with password, or Unix socket). |
 
+## Import from PostgreSQL
+
+| Command | What it does |
+|---|---|
+| `pgx copy --from <postgres-url> --to <db> [--schema-only] [--jobs N] [--verbose] [--no-optimize]` | Copy an existing PostgreSQL database into PGX as a template to clone from: `pg_dump` (read-only on the source) → compatibility gate → `pg_restore --exit-on-error` into a staging database → validate → `VACUUM (FREEZE, ANALYZE)` → atomic rename to `<db>`. Refuses an existing destination (exit 4) and an incompatible source (exit 1) without creating anything. Needs `pg_dump`/`pg_restore` (`PGX_PG_BINDIR`, `PATH`, or the usual install dirs). See [copy.md](copy.md). |
+
 Temporary databases (`--ttl`) are deleted automatically by a background worker;
 permanent databases are never auto-deleted. Full semantics: [ttl.md](ttl.md).
 
@@ -53,7 +59,8 @@ permanent databases are never auto-deleted. Full semantics: [ttl.md](ttl.md).
 
 `pgx doctor` checks the install, data directory, config mode, socket-path
 length, port, runtime, disk, stack limit, filesystem/block-cloning, libxml2/ICU,
-and orphan `base/<oid>` directories (read-only; never deletes). `pgx version`
+the PostgreSQL client tools `pgx copy` would use, and orphan `base/<oid>`
+directories (read-only; never deletes). `pgx version`
 reports the engine commit and PostgreSQL compatibility. `pgx help`.
 
 ## Database names
@@ -71,4 +78,5 @@ database in use · `7` corrupted or incomplete installation.
 
 `PGX_HOME` (data home), `PGX_RUN_DIR` (socket directory, for a long `$PGX_HOME`),
 `PGX_PORT` / `PGX_DURABILITY` / `PGX_LISTEN` / `PGX_PASSWORD` (read by `init` and
-`serve`, used by the Docker entrypoint).
+`serve`, used by the Docker entrypoint), `PGX_PG_BINDIR` (where `pgx copy` finds
+`pg_dump` and `pg_restore`).

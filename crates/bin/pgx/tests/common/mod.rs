@@ -217,6 +217,11 @@ impl Pgx {
         self.output_retrying(|| self.cmd(args), "pgx")
     }
 
+    /// `output_retrying` for suites that build their own Command (extra env).
+    pub fn output_retrying_pub(&self, make: impl Fn() -> Command, what: &str) -> Run {
+        self.output_retrying(make, what)
+    }
+
     pub fn init(&self) -> Run {
         let port = self.port.to_string();
         self.run(&["init", "--port", &port])
@@ -437,5 +442,256 @@ impl Run {
     pub fn json(&self) -> serde_json::Value {
         serde_json::from_str(self.stdout.trim())
             .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", self.all()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A real PostgreSQL source for the `pgx copy` suite: its own initdb cluster on
+// a free port, trust on the Unix socket (for test setup) and scram-sha-256 over
+// TCP (what `pgx copy --from postgres://…` exercises, so wrong credentials are
+// really wrong). Stopped and removed on drop.
+
+/// The PostgreSQL bin directory with initdb/pg_ctl/pg_dump: `PGX_TEST_PG_BINDIR`,
+/// `PG18_BINDIR` (CI), the directory of the psql we found, or a PATH search.
+pub fn pg_bindir() -> PathBuf {
+    for var in ["PGX_TEST_PG_BINDIR", "PG18_BINDIR"] {
+        if let Ok(d) = std::env::var(var) {
+            if Path::new(&d).join("initdb").exists() {
+                return PathBuf::from(d);
+            }
+        }
+    }
+    let psql = find_psql();
+    if psql.is_absolute() {
+        if let Some(d) = psql.parent() {
+            if d.join("initdb").exists() {
+                return d.to_path_buf();
+            }
+        }
+    }
+    if let Ok(path) = std::env::var("PATH") {
+        for d in path.split(':') {
+            if Path::new(d).join("initdb").exists() && Path::new(d).join("pg_dump").exists() {
+                return PathBuf::from(d);
+            }
+        }
+    }
+    panic!("no PostgreSQL bin directory with initdb found; set PGX_TEST_PG_BINDIR")
+}
+
+pub struct PgSource {
+    pub dir: PathBuf,
+    pub port: u16,
+    pub bindir: PathBuf,
+    pub password: String,
+}
+
+impl PgSource {
+    pub fn start() -> PgSource {
+        let bindir = pg_bindir();
+        let id = format!(
+            "{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        );
+        let dir = scratch_root().join(format!("pg{id}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let port = free_port();
+        let password = "src-s3cret-PW".to_string();
+        let out = output_locked(Command::new(bindir.join("initdb")).args([
+            "-D",
+            dir.to_str().unwrap(),
+            "--no-sync",
+            "-A",
+            "trust",
+            "-U",
+            "postgres",
+            "-E",
+            "UTF8",
+            "--no-locale",
+        ]))
+        .expect("spawn initdb");
+        assert!(
+            out.status.success(),
+            "initdb failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        std::fs::write(
+            dir.join("pg_hba.conf"),
+            "local all all trust\nhost all all 127.0.0.1/32 scram-sha-256\nhost all all ::1/128 scram-sha-256\n",
+        )
+        .unwrap();
+        let opts = format!(
+            "-p {port} -k {} -c listen_addresses=127.0.0.1 -c fsync=off -c synchronous_commit=off -c full_page_writes=off",
+            dir.display()
+        );
+        let out = output_locked(Command::new(bindir.join("pg_ctl")).args([
+            "-D",
+            dir.to_str().unwrap(),
+            "-o",
+            &opts,
+            "-l",
+            dir.join("server.log").to_str().unwrap(),
+            "-w",
+            "start",
+        ]))
+        .expect("spawn pg_ctl");
+        assert!(
+            out.status.success(),
+            "pg_ctl start failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            std::fs::read_to_string(dir.join("server.log")).unwrap_or_default()
+        );
+        let src = PgSource {
+            dir,
+            port,
+            bindir,
+            password,
+        };
+        let r = src.psql(
+            "postgres",
+            &format!("ALTER ROLE postgres PASSWORD '{}'", src.password),
+        );
+        assert_eq!(r.code, 0, "{}", r.all());
+        src
+    }
+
+    /// `postgres://postgres:<password>@127.0.0.1:<port>/<db>` (scram over TCP).
+    pub fn url(&self, db: &str) -> String {
+        format!(
+            "postgres://postgres:{}@127.0.0.1:{}/{db}",
+            self.password, self.port
+        )
+    }
+
+    /// SQL over the trusted Unix socket; `-c` so a multi-statement string runs
+    /// in one transaction (like a migration) unless it contains statements that
+    /// refuse that, in which case call once per statement.
+    pub fn psql(&self, db: &str, sql: &str) -> Run {
+        let mut cmd = Command::new(self.bindir.join("psql"));
+        cmd.args([
+            "-X",
+            "-q",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-h",
+            self.dir.to_str().unwrap(),
+            "-p",
+            &self.port.to_string(),
+            "-U",
+            "postgres",
+            "-d",
+            db,
+            "-Atc",
+            sql,
+        ])
+        .env_remove("PGPASSWORD");
+        Run::from(output_locked(&mut cmd).expect("spawn psql"))
+    }
+
+    pub fn create_db(&self, name: &str) {
+        let r = self.psql("postgres", &format!("CREATE DATABASE \"{name}\""));
+        assert_eq!(r.code, 0, "{}", r.all());
+    }
+
+    /// A deterministic fingerprint of every user table's rows and of the
+    /// object inventory — to prove the source was not modified.
+    pub fn fingerprint(&self, db: &str) -> String {
+        let r = self.psql(
+            db,
+            "SELECT string_agg(x, ';' ORDER BY x) FROM ( \
+               SELECT n.nspname || '.' || c.relname || '=' || \
+                 (xpath('/row/c/text()', query_to_xml(format('SELECT md5(string_agg(t::text, %L ORDER BY t::text)) AS c FROM %I.%I t', '|', n.nspname, c.relname), false, true, '')))[1]::text AS x \
+               FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+               WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' \
+               UNION ALL SELECT 'objects=' || count(*)::text FROM pg_class WHERE relnamespace = 'public'::regnamespace \
+               UNION ALL SELECT 'procs=' || count(*)::text FROM pg_proc WHERE pronamespace = 'public'::regnamespace \
+             ) s",
+        );
+        assert_eq!(r.code, 0, "{}", r.all());
+        r.stdout.trim().to_string()
+    }
+}
+
+impl Drop for PgSource {
+    fn drop(&mut self) {
+        let _ = output_locked(Command::new(self.bindir.join("pg_ctl")).args([
+            "-D",
+            self.dir.to_str().unwrap(),
+            "-m",
+            "immediate",
+            "-w",
+            "stop",
+        ]));
+        if std::env::var("PGX_TEST_KEEP").is_err() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+}
+
+impl Pgx {
+    /// `pgx [--json] copy --from <src url> --to <dest> [extra…]` with the test
+    /// PostgreSQL bin directory pinned, so the tools under test are the same
+    /// ones that created the source.
+    pub fn copy(&self, src: &PgSource, db: &str, dest: &str, extra: &[&str]) -> Run {
+        let url = src.url(db);
+        let mut args = vec!["copy", "--from", url.as_str(), "--to", dest];
+        args.extend_from_slice(extra);
+        self.copy_args(src, &args)
+    }
+
+    pub fn copy_json(&self, src: &PgSource, db: &str, dest: &str, extra: &[&str]) -> Run {
+        let url = src.url(db);
+        let mut args = vec!["--json", "copy", "--from", url.as_str(), "--to", dest];
+        args.extend_from_slice(extra);
+        self.copy_args(src, &args)
+    }
+
+    pub fn copy_args(&self, src: &PgSource, args: &[&str]) -> Run {
+        self.output_retrying(
+            || {
+                let mut c = self.cmd(args);
+                c.env("PGX_PG_BINDIR", &src.bindir);
+                c
+            },
+            "pgx copy",
+        )
+    }
+
+    pub fn db_exists(&self, name: &str) -> bool {
+        self.psql(
+            "postgres",
+            &format!("SELECT count(*) FROM pg_database WHERE datname='{name}'"),
+        )
+        .stdout
+        .trim()
+            == "1"
+    }
+
+    /// Names of `_pgxcopy_*` staging databases currently present.
+    pub fn staging_dbs(&self) -> Vec<String> {
+        self.psql(
+            "postgres",
+            "SELECT datname FROM pg_database WHERE datname LIKE '\\_pgxcopy\\_%' ORDER BY 1",
+        )
+        .stdout
+        .lines()
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+    }
+
+    /// Entries under $PGX_HOME/tmp and $PGX_HOME/copy (both must be empty after
+    /// any finished copy).
+    pub fn copy_leftovers(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        for sub in ["tmp", "copy"] {
+            if let Ok(rd) = std::fs::read_dir(self.home.join(sub)) {
+                for e in rd.flatten() {
+                    v.push(format!("{sub}/{}", e.file_name().to_string_lossy()));
+                }
+            }
+        }
+        v
     }
 }

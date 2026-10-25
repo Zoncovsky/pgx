@@ -91,7 +91,7 @@ jobs:
       - name: Black-box suites
         run: |
           python3 -I tests/pgx/test_sql.py
-          cargo test -p pgx --release --test lifecycle --test databases --test clone --test doctor --test run --test ttl
+          cargo test -p pgx --release --test lifecycle --test databases --test clone --test doctor --test run --test ttl --test copy
       - name: Installer end-to-end
         run: dist/test/install_test.sh
       - name: Installer discovery/version/checksum/download tests

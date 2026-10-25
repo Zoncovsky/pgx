@@ -61,6 +61,15 @@ tar -xzf pgx-<version>-<os>-<arch>.tar.gz
 ./pgx-<version>-<os>-<arch>/bin/pgx version
 ```
 
+## Importing an existing PostgreSQL database
+
+`pgx copy --from "$DATABASE_URL" --to myapp_template` copies a PostgreSQL
+database into PGX as a template to branch from. This one command needs the
+PostgreSQL client tools `pg_dump` and `pg_restore` on the machine (not
+bundled; a PostgreSQL installation provides them, otherwise `brew install
+libpq` / `apt install postgresql-client-18`). Everything else in PGX is
+self-contained. See [copy.md](copy.md).
+
 ## Docker
 
 ```sh

@@ -3,14 +3,17 @@ mod cli;
 mod cmd;
 mod conf;
 mod config;
+mod conninfo;
 mod errors;
 mod fsdetect;
 mod fsutil;
 mod layout;
 mod names;
 mod out;
+mod pgtools;
 mod pgwire;
 mod process;
+mod toc;
 mod ttl;
 mod ttlstore;
 
@@ -81,6 +84,7 @@ fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
                 Command::Ls => cmd::db::ls(&out),
                 Command::Ttl { name, value } => cmd::ttl::run(&out, &name, value.as_deref()),
                 Command::Url { name, socket } => cmd::db::url(&out, &name, socket),
+                Command::Copy(opts) => cmd::copy::run(&out, opts),
                 Command::Help
                 | Command::Version
                 | Command::Init { .. }

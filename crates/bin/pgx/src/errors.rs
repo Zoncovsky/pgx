@@ -6,6 +6,9 @@ pub struct PgxError {
     pub code: ExitCode,
     pub message: String,
     pub hint: Option<String>,
+    /// Structured cause for `--json` consumers (for example the unsupported
+    /// extensions that stopped a copy). Absent from human output.
+    pub details: Option<serde_json::Value>,
 }
 
 impl PgxError {
@@ -14,7 +17,12 @@ impl PgxError {
             code,
             message: message.into(),
             hint: None,
+            details: None,
         }
+    }
+    pub fn details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
+        self
     }
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
@@ -30,13 +38,16 @@ impl PgxError {
         PgxError::failure(format!("{what} {}: {e}", path.display()))
     }
     pub fn to_json(&self) -> String {
-        serde_json::json!({"error": {
+        let mut err = serde_json::json!({
             "code": self.code.name(),
             "exit_code": self.code as i32,
             "message": self.message,
             "hint": self.hint,
-        }})
-        .to_string()
+        });
+        if let Some(d) = &self.details {
+            err["details"] = d.clone();
+        }
+        serde_json::json!({ "error": err }).to_string()
     }
 }
 
@@ -73,5 +84,12 @@ mod tests {
         assert_eq!(v["error"]["code"], "conflict");
         assert_eq!(v["error"]["exit_code"], 4);
         assert_eq!(v["error"]["message"], "port 5432 is in use");
+        assert!(v["error"].get("details").is_none());
+        let e = e.details(serde_json::json!({"unsupported_extensions": ["postgis"]}));
+        let v: serde_json::Value = serde_json::from_str(&e.to_json()).unwrap();
+        assert_eq!(
+            v["error"]["details"]["unsupported_extensions"][0],
+            "postgis"
+        );
     }
 }

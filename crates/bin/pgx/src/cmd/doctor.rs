@@ -547,6 +547,22 @@ pub fn run(out: &Out) -> Result<ExitCode> {
             )),
         }
     }
+    // PostgreSQL client tools (only `pgx copy` needs them; not bundled).
+    match crate::pgtools::locate() {
+        Ok(t) => checks.push(ok(
+            "client_tools",
+            format!(
+                "pg_dump/pg_restore {} in {} (for `pgx copy`)",
+                t.version,
+                t.dir.display()
+            ),
+        )),
+        Err(e) => checks.push(warn(
+            "client_tools",
+            "pg_dump/pg_restore not found; `pgx copy` (import from PostgreSQL) needs them, nothing else does",
+            e.hint.unwrap_or_default(),
+        )),
+    }
     if home.log_file.exists() {
         let tail = process::log_tail(&home, 200);
         let bad: Vec<&str> = tail

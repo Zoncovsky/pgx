@@ -14,5 +14,10 @@ Run `pgx doctor` first; it names most problems and the fix.
 | `pgx doctor` warns about orphan `base/<oid>` directories | A CREATE DATABASE or clone was interrupted by a crash. PGX never deletes them automatically; after confirming nothing is creating a database, remove them by hand from `$PGX_HOME/data/base`. |
 | In a container, `pgx stop` seems slow or restart fails after a kill | The container has no init to reap processes. Run it with `docker run --init`, or use `pgx serve` (the engine is PID 1). |
 | disk full → `53100` then the runtime stops | Expected: PGX is one crash domain. Free space and `pgx start`; committed data is recovered. |
+| `pgx copy` → exit 1, "pg_dump and pg_restore were not found" | `pgx copy` runs the PostgreSQL client tools, which PGX does not bundle. Install them (`brew install libpq`, `apt install postgresql-client-18`, …) or set `PGX_PG_BINDIR`. `pgx doctor` shows what it finds. See [copy.md](copy.md). |
+| `pgx copy` → exit 1, "unsupported extension: …" | The source uses an extension PGX does not have (PostGIS, TimescaleDB, …). PGX cannot load C extensions; keep that database on PostgreSQL or drop the extension in a copy of the source. |
+| `pgx copy` → exit 1, "restore into PGX failed … role … does not exist" | A policy or similar object names a role; roles are not part of a database dump. `psql "$(pgx url postgres)" -c 'CREATE ROLE <name>'` and retry. |
+| `pgx copy` → exit 4, "database … already exists" | `pgx copy` never overwrites. Use another `--to` name or `pgx drop` the old one first. |
+| `pgx ls` shows `_pgxcopy_… abandoned` | A `pgx copy` process was killed. The next `pgx copy` removes it, or `pgx drop _pgxcopy_… --force`. |
 
 Logs: `$PGX_HOME/log/pgx.log`. Status as JSON: `pgx --json status`.

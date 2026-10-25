@@ -83,6 +83,8 @@ pub enum Command {
         name: String,
         socket: bool,
     },
+    /// `pgx copy --from <url> --to <db>`: import an external PostgreSQL database.
+    Copy(crate::cmd::copy::Opts),
     Doctor,
     /// Hidden: the background TTL cleanup worker, spawned by start/run/serve.
     Supervise,
@@ -112,7 +114,7 @@ pub fn parse(args: &[String]) -> Result<(Global, Command)> {
         if let Some(flag) = t.strip_prefix("--") {
             if let Some((k, v)) = flag.split_once('=') {
                 flags.push((k, Some(v)));
-            } else if matches!(flag, "port" | "durability" | "ttl") {
+            } else if matches!(flag, "port" | "durability" | "ttl" | "from" | "to" | "jobs") {
                 let v = tail
                     .get(i + 1)
                     .copied()
@@ -251,6 +253,47 @@ pub fn parse(args: &[String]) -> Result<(Global, Command)> {
                 socket: has("socket"),
             }
         }
+        "copy" => {
+            only_flags(&[
+                "from",
+                "to",
+                "schema-only",
+                "jobs",
+                "verbose",
+                "no-optimize",
+            ])?;
+            arity(
+                0,
+                "copy --from <postgres-url> --to <database> [--schema-only] [--jobs N] [--verbose] [--no-optimize]",
+            )?;
+            let from = value("from")
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| PgxError::usage("pgx copy: --from <postgres-url> is required"))?;
+            let to = value("to")
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| PgxError::usage("pgx copy: --to <database> is required"))?;
+            let jobs = match value("jobs") {
+                None => None,
+                Some(j) => Some(
+                    j.parse::<u32>()
+                        .ok()
+                        .filter(|j| (1..=64).contains(j))
+                        .ok_or_else(|| {
+                            PgxError::usage(format!(
+                                "--jobs must be a number between 1 and 64, got {j:?}"
+                            ))
+                        })?,
+                ),
+            };
+            Command::Copy(crate::cmd::copy::Opts {
+                from: from.to_string(),
+                to: to.to_string(),
+                schema_only: has("schema-only"),
+                jobs,
+                verbose: has("verbose"),
+                optimize: !has("no-optimize"),
+            })
+        }
         "doctor" => {
             only_flags(&[])?;
             arity(0, "doctor")?;
@@ -295,6 +338,15 @@ Databases
   pgx ttl <database> [<dur>]        show the TTL, or set it (<dur> or `unlimited`)
   pgx url <database> [--socket]     connection URL (TCP with password, or Unix socket)
 
+Import from PostgreSQL
+  pgx copy --from <postgres-url> --to <database> [--schema-only] [--jobs N]
+                          copy an existing PostgreSQL database into PGX (pg_dump →
+                          pg_restore, read-only on the source) as a template to
+                          clone from. Needs pg_dump/pg_restore on PATH or in
+                          PGX_PG_BINDIR. --schema-only skips table data;
+                          --no-optimize skips VACUUM (FREEZE, ANALYZE); --verbose
+                          shows the tools' output.
+
   TTL durations: 30s 5m 15m 1h 6h 24h 7d (general s/m/h/d), or `unlimited`
   (the default). Temporary databases are removed automatically by a background
   worker; permanent databases are never auto-deleted.
@@ -312,6 +364,7 @@ Environment
   PGX_PORT                port for the first `pgx run`/`pgx serve` (else auto 5432-5500)
   PGX_DURABILITY          ephemeral (default) or full, for the first init
   PGX_PASSWORD            superuser password for the first init (else random)
+  PGX_PG_BINDIR           directory with pg_dump and pg_restore for `pgx copy`
 
 Exit codes
   0 ok · 1 engine or runtime error · 2 usage · 3 not initialised / not running
@@ -474,6 +527,56 @@ mod tests {
     }
 
     #[test]
+    fn parse_copy_subcommand() {
+        use crate::cmd::copy::Opts;
+        assert_eq!(
+            parse(&args("copy --from postgres://u:p@h/d --to tpl"))
+                .unwrap()
+                .1,
+            Command::Copy(Opts {
+                from: "postgres://u:p@h/d".into(),
+                to: "tpl".into(),
+                schema_only: false,
+                jobs: None,
+                verbose: false,
+                optimize: true,
+            })
+        );
+        let (g, c) = parse(&args(
+            "--json copy --from=postgres://h/d --to=tpl --schema-only --jobs 4 --verbose --no-optimize",
+        ))
+        .unwrap();
+        assert!(g.json);
+        assert_eq!(
+            c,
+            Command::Copy(Opts {
+                from: "postgres://h/d".into(),
+                to: "tpl".into(),
+                schema_only: true,
+                jobs: Some(4),
+                verbose: true,
+                optimize: false,
+            })
+        );
+        for bad in [
+            "copy",
+            "copy --from x",
+            "copy --to x",
+            "copy --from x --to y extra",
+            "copy --from x --to y --jobs 0",
+            "copy --from x --to y --jobs many",
+            "copy --from x --to y --data-only",
+            "copy --from",
+        ] {
+            assert_eq!(
+                parse(&args(bad)).unwrap_err().code,
+                ExitCode::Usage,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
     fn unknown_subcommand_is_usage_error() {
         let e = parse(&args("frobnicate")).unwrap_err();
         assert_eq!(e.code, ExitCode::Usage);
@@ -507,7 +610,7 @@ mod tests {
         let h = help_text();
         for c in [
             "run", "init", "start", "stop", "restart", "status", "create", "drop", "clone", "ls",
-            "url", "doctor", "version", "help",
+            "url", "copy", "doctor", "version", "help",
         ] {
             assert!(
                 h.contains(&format!("pgx {c}")) || h.contains(&format!("  {c}")),

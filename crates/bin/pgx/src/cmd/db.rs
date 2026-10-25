@@ -317,6 +317,8 @@ pub fn ls(out: &Out) -> Result<ExitCode> {
         };
         let status = if invalid {
             "invalid"
+        } else if let Some(s) = crate::cmd::copy::staging_status(&ctx.home, &name) {
+            s
         } else {
             match rec.map(|r| r.state) {
                 Some(crate::ttlstore::State::Expiring) => "expiring",

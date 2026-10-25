@@ -381,6 +381,26 @@ permanent or system databases, and resumes cleanup automatically after a
 `pgx stop` / `pgx start`. Details and the identity-safety model are in
 [`docs/pgx/local-dev/ttl.md`](docs/pgx/local-dev/ttl.md).
 
+### Keep your Postgres, branch it in PGX
+
+Already have a PostgreSQL database? Copy it into PGX once, then give every
+agent its own branch. The source is only read; PostgreSQL stays your source of
+truth.
+
+```bash
+PGX_PORT=5433 npx pgxdb@latest                       # PGX beside PostgreSQL on 5432
+pgx copy --from "$DATABASE_URL" --to myapp_template   # pg_dump → pg_restore, read-only
+pgx clone myapp_template agent-1 --ttl 2h             # isolated branches, self-expiring
+pgx clone myapp_template agent-2 --ttl 2h
+pgx url agent-1                                       # each agent gets its own URL
+```
+
+`--schema-only` copies the structure without the rows. The copy needs
+`pg_dump`/`pg_restore` on the machine (a PostgreSQL install has them); it
+refuses sources that use extensions PGX does not ship (PostGIS, TimescaleDB,
+…) and never overwrites an existing database. Details, limitations and
+measurements: [`docs/pgx/local-dev/copy.md`](docs/pgx/local-dev/copy.md).
+
 ### Build from source
 
 You need the Rust toolchain (`rust-toolchain.toml` pins Rust 1.96.0;
@@ -484,6 +504,7 @@ any semantic difference (`classify-regress-diffs.py --fail-on-semantic`).
 | [`v0.1-readiness.md`](docs/pgx/v0.1-readiness.md) | what is ready, known limitations, approved use |
 | [`linux-results.md`](docs/pgx/linux-results.md) | the full benchmark report |
 | [`compatibility-gate.md`](docs/pgx/compatibility-gate.md) | how to decide whether a database can run on PGX |
+| [`local-dev/copy.md`](docs/pgx/local-dev/copy.md) | `pgx copy`: import an existing PostgreSQL database and branch it per agent |
 | [`pgrun-integration.md`](docs/pgx/pgrun-integration.md) | the host-agent API PGRun builds against |
 | [`lifecycle-memory.md`](docs/pgx/lifecycle-memory.md), [`linux-churn.md`](docs/pgx/linux-churn.md) | memory under long churn, and what was fixed |
 | [`zfs-cow.md`](docs/pgx/zfs-cow.md) | copy-on-write branch cost and the recordsize trade-off |

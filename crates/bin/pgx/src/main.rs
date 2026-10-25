@@ -81,6 +81,9 @@ fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
                     target,
                     ttl,
                 } => cmd::db::clone(&out, &source, &target, ttl.as_deref()),
+                Command::Branch { source, name, ttl } => {
+                    cmd::db::branch(&out, &source, &name, ttl.as_deref())
+                }
                 Command::Ls => cmd::db::ls(&out),
                 Command::Ttl { name, value } => cmd::ttl::run(&out, &name, value.as_deref()),
                 Command::Url { name, socket } => cmd::db::url(&out, &name, socket),

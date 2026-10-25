@@ -73,6 +73,13 @@ pub enum Command {
         /// `--ttl <dur>`; None means unlimited (TTL is never inherited from the source).
         ttl: Option<String>,
     },
+    /// `pgx branch <source> <name> [--ttl <dur>]`: a clone for one agent with a
+    /// 2h default TTL; prints the connection URL last. None means the default.
+    Branch {
+        source: String,
+        name: String,
+        ttl: Option<String>,
+    },
     Ls,
     /// `pgx ttl <db>` shows the TTL; `pgx ttl <db> <dur>` sets it (dur may be `unlimited`).
     Ttl {
@@ -223,6 +230,15 @@ pub fn parse(args: &[String]) -> Result<(Global, Command)> {
                 ttl: value("ttl").map(String::from),
             }
         }
+        "branch" => {
+            only_flags(&["ttl"])?;
+            arity(2, "branch <source> <name> [--ttl <duration>]")?;
+            Command::Branch {
+                source: positional[0].into(),
+                name: positional[1].into(),
+                ttl: value("ttl").map(String::from),
+            }
+        }
         "ls" | "list" => {
             only_flags(&[])?;
             arity(0, "ls")?;
@@ -334,6 +350,9 @@ Databases
   pgx create <database> [--ttl <dur>]   --ttl makes it temporary (auto-expires)
   pgx drop <database> [--force]     --force terminates connected sessions first
   pgx clone <source> <target> [--ttl <dur>]   copy-on-write where supported; TTL not inherited
+  pgx branch <source> <name> [--ttl <dur>]    a disposable database for one agent: a clone
+                                    that expires after 2h unless --ttl says otherwise;
+                                    prints its connection URL as the last line
   pgx ls                            name, status, TTL, expires-in
   pgx ttl <database> [<dur>]        show the TTL, or set it (<dur> or `unlimited`)
   pgx url <database> [--socket]     connection URL (TCP with password, or Unix socket)
@@ -342,7 +361,8 @@ Import from PostgreSQL
   pgx copy --from <postgres-url> --to <database> [--schema-only] [--jobs N]
                           copy an existing PostgreSQL database into PGX (pg_dump →
                           pg_restore, read-only on the source) as a template to
-                          clone from. Needs pg_dump/pg_restore on PATH or in
+                          branch from: `pgx copy --from \"$DATABASE_URL\" --to myapp`,
+                          then `pgx branch myapp agent-1` per agent. Needs pg_dump/pg_restore on PATH or in
                           PGX_PG_BINDIR. --schema-only skips table data;
                           --no-optimize skips VACUUM (FREEZE, ANALYZE); --verbose
                           shows the tools' output.
@@ -451,6 +471,45 @@ mod tests {
                 ttl: Some("1h".into())
             }
         );
+        assert_eq!(
+            parse(&args("branch myapp agent-1")).unwrap().1,
+            Command::Branch {
+                source: "myapp".into(),
+                name: "agent-1".into(),
+                ttl: None
+            }
+        );
+        assert_eq!(
+            parse(&args("branch myapp agent-3 --ttl 30m")).unwrap().1,
+            Command::Branch {
+                source: "myapp".into(),
+                name: "agent-3".into(),
+                ttl: Some("30m".into())
+            }
+        );
+        assert_eq!(
+            parse(&args("--json branch myapp agent-1 --ttl=unlimited"))
+                .unwrap()
+                .1,
+            Command::Branch {
+                source: "myapp".into(),
+                name: "agent-1".into(),
+                ttl: Some("unlimited".into())
+            }
+        );
+        for bad in [
+            "branch",
+            "branch myapp",
+            "branch a b c",
+            "branch a b --force",
+            "branch a b --ttl",
+        ] {
+            assert_eq!(
+                parse(&args(bad)).unwrap_err().code,
+                ExitCode::Usage,
+                "{bad}"
+            );
+        }
         assert_eq!(
             parse(&args("ttl agent-1")).unwrap().1,
             Command::Ttl {
@@ -609,8 +668,8 @@ mod tests {
     fn help_mentions_every_command() {
         let h = help_text();
         for c in [
-            "run", "init", "start", "stop", "restart", "status", "create", "drop", "clone", "ls",
-            "url", "copy", "doctor", "version", "help",
+            "run", "init", "start", "stop", "restart", "status", "create", "drop", "clone",
+            "branch", "ls", "url", "copy", "doctor", "version", "help",
         ] {
             assert!(
                 h.contains(&format!("pgx {c}")) || h.contains(&format!("  {c}")),

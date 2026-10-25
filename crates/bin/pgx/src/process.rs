@@ -471,11 +471,16 @@ mod tests {
     fn cloexec_inherited_fds_hides_a_leaked_descriptor_from_the_child() {
         use std::os::unix::process::CommandExt;
         // A pipe WITHOUT close-on-exec, as a half-initialised descriptor in a
-        // forking parent would be. The child tries to write to it.
+        // forking parent would be. The child writes a token to it through its
+        // /dev/fd path rather than `>&N`: dash (Ubuntu's /bin/sh) accepts only
+        // a single digit after `>&`, and N depends on how many descriptors the
+        // other test threads hold open at that moment, which made this test
+        // fail whenever N reached 10. The path form works in every POSIX shell
+        // for any N, and fails exactly when the descriptor is absent in the child.
         let mut fds = [0i32; 2];
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
         let (r, w) = (fds[0], fds[1]);
-        let probe = format!("echo leaked >&{w}");
+        let probe = format!("echo leaked > /dev/fd/{w}");
         let without = std::process::Command::new("/bin/sh")
             .args(["-c", &probe])
             .stderr(std::process::Stdio::null())
@@ -483,8 +488,13 @@ mod tests {
             .unwrap();
         assert!(
             without.success(),
-            "control: the child can use the inherited fd"
+            "control: the child can use the inherited fd {w}"
         );
+        // The token really arrived through our pipe.
+        let mut buf = [0u8; 16];
+        let n = unsafe { libc::read(r, buf.as_mut_ptr().cast(), buf.len()) };
+        assert_eq!(&buf[..usize::try_from(n).unwrap_or(0)], b"leaked\n");
+
         let mut c = std::process::Command::new("/bin/sh");
         c.args(["-c", &probe]).stderr(std::process::Stdio::null());
         unsafe {
@@ -495,6 +505,11 @@ mod tests {
         }
         let with = c.status().unwrap();
         assert!(!with.success(), "the inherited fd must be closed on exec");
+        // And nothing reached the pipe: a non-blocking read finds it empty
+        // (the parent still holds the write end, so this is EAGAIN, not EOF).
+        unsafe { libc::fcntl(r, libc::F_SETFL, libc::O_NONBLOCK) };
+        let n = unsafe { libc::read(r, buf.as_mut_ptr().cast(), buf.len()) };
+        assert!(n <= 0, "a token leaked through the closed descriptor");
         unsafe {
             libc::close(w);
             libc::close(r);

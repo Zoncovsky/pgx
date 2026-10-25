@@ -1,4 +1,4 @@
-//! `pgx create | drop | clone | ls | url`.
+//! `pgx create | drop | clone | branch | ls | url`.
 use super::{db_error, Ctx};
 use crate::cli::ExitCode;
 use crate::errors::{PgxError, Result};
@@ -210,20 +210,43 @@ pub fn drop(out: &Out, name: &str, force: bool) -> Result<ExitCode> {
     Ok(ExitCode::Ok)
 }
 
-pub fn clone(out: &Out, source: &str, target: &str, ttl_arg: Option<&str>) -> Result<ExitCode> {
-    let target = names::validate_user_target(target)?;
-    let source = names::validate(source)?;
-    if let Some(s) = ttl_arg {
-        crate::ttl::parse_ttl(s)?;
-    }
-    let ctx = Ctx::load()?;
-    let mut client = ctx.connect("postgres")?;
-    if !exists(&ctx, &mut client, &source)? {
+/// What a clone produced, for the command's output.
+pub struct Cloned {
+    pub elapsed_ms: f64,
+    /// `clone` when the engine's `file_copy_method` shares blocks, else `copy`.
+    pub method: &'static str,
+    pub ttl: crate::ttl::Ttl,
+    pub expires_at: Option<u64>,
+    pub now: u64,
+}
+
+/// The one clone path, shared by `pgx clone` and `pgx branch`: check the
+/// source and the target, `CREATE DATABASE … TEMPLATE … STRATEGY = FILE_COPY`,
+/// record the TTL. A refused call creates nothing. The explicit target check
+/// gives a clear message; the engine's own uniqueness check stays the
+/// authority when two calls race for one name (sqlstate 42P04 → exit 4).
+fn clone_database(
+    ctx: &Ctx,
+    client: &mut Client,
+    source: &DbName,
+    target: &DbName,
+    ttl_arg: Option<&str>,
+) -> Result<Cloned> {
+    if !exists(ctx, client, source)? {
         return Err(PgxError::new(
             ExitCode::NotFound,
             format!("source database {source} does not exist"),
         )
         .hint("`pgx ls` lists databases"));
+    }
+    if exists(ctx, client, target)? {
+        return Err(PgxError::new(
+            ExitCode::Conflict,
+            format!("database {target} already exists"),
+        )
+        .hint(format!(
+            "pick another name, or `pgx drop {target}` first; nothing was changed"
+        )));
     }
     // STRATEGY = FILE_COPY makes CREATE DATABASE copy the files, so the engine's
     // file_copy_method applies: clonefile on APFS, copy_file_range/FICLONE on
@@ -260,9 +283,34 @@ pub fn clone(out: &Out, source: &str, target: &str, ttl_arg: Option<&str>) -> Re
     let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
     // TTL is never inherited from the source: it comes only from --ttl here.
     let now = crate::fsutil::now_epoch();
-    let ttl = record_ttl(&ctx, &mut client, &target, ttl_arg)?;
+    let ttl = record_ttl(ctx, client, target, ttl_arg)?;
     let expires_at = ttl.expires_at(now)?;
+    Ok(Cloned {
+        elapsed_ms,
+        method,
+        ttl,
+        expires_at,
+        now,
+    })
+}
+
+pub fn clone(out: &Out, source: &str, target: &str, ttl_arg: Option<&str>) -> Result<ExitCode> {
+    let target = names::validate_user_target(target)?;
+    let source = names::validate(source)?;
+    if let Some(s) = ttl_arg {
+        crate::ttl::parse_ttl(s)?;
+    }
+    let ctx = Ctx::load()?;
+    let mut client = ctx.connect("postgres")?;
+    let c = clone_database(&ctx, &mut client, &source, &target, ttl_arg)?;
     client.close();
+    let Cloned {
+        elapsed_ms,
+        method,
+        ttl,
+        expires_at,
+        now,
+    } = c;
     let url = tcp_url(&ctx, target.as_str());
     let mut obj = json!({"source": source.as_str(), "target": target.as_str(), "elapsed_ms": (elapsed_ms * 10.0).round() / 10.0, "method": method, "url": url});
     merge(&mut obj, ttl_json(&ttl, expires_at, now));
@@ -277,6 +325,50 @@ pub fn clone(out: &Out, source: &str, target: &str, ttl_arg: Option<&str>) -> Re
     out.emit(
         &format!(
             "cloned {source} to {target} in {elapsed_ms:.0} ms ({method}){ttl_line}\n  url  {url}"
+        ),
+        obj,
+    );
+    Ok(ExitCode::Ok)
+}
+
+/// The TTL a branch gets when `--ttl` is not given.
+pub const BRANCH_DEFAULT_TTL: &str = "2h";
+
+/// `pgx branch <source> <name> [--ttl <dur>]`: a disposable database for one
+/// agent. It is `pgx clone` with a 2-hour default TTL and the connection URL
+/// as the last line of output, so `DATABASE_URL="$(pgx branch app agent-1 | tail -1)"`
+/// works; `--json` carries the same fields as `pgx clone --json` plus `branch`.
+pub fn branch(out: &Out, source: &str, name: &str, ttl_arg: Option<&str>) -> Result<ExitCode> {
+    let target = names::validate_user_target(name)?;
+    let source = names::validate(source)?;
+    let ttl_arg = ttl_arg.unwrap_or(BRANCH_DEFAULT_TTL);
+    // Validate the TTL before touching the runtime, so a bad --ttl creates nothing.
+    crate::ttl::parse_ttl(ttl_arg)?;
+    let ctx = Ctx::load()?;
+    let mut client = ctx.connect("postgres")?;
+    let c = clone_database(&ctx, &mut client, &source, &target, Some(ttl_arg))?;
+    client.close();
+    let url = tcp_url(&ctx, target.as_str());
+    let mut obj = json!({
+        "branch": target.as_str(),
+        "database": target.as_str(),
+        "source": source.as_str(),
+        "url": url,
+        "socket_url": socket_url(&ctx, target.as_str()),
+        "host": "127.0.0.1",
+        "port": ctx.config.port,
+        "user": "postgres",
+        "elapsed_ms": (c.elapsed_ms * 10.0).round() / 10.0,
+        "method": c.method,
+    });
+    merge(&mut obj, ttl_json(&c.ttl, c.expires_at, c.now));
+    let expires = match c.ttl.as_seconds() {
+        Some(secs) => crate::ttl::humanize_long(secs),
+        None => format!("never (permanent; `pgx drop {target}` removes it)"),
+    };
+    out.emit(
+        &format!(
+            "✓ Branch created: {target}\n✓ Source: {source}\n✓ Expires in: {expires}\n\nDATABASE_URL:\n{url}"
         ),
         obj,
     );

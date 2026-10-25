@@ -62,9 +62,7 @@ fn a_full_copy_restores_schema_and_data_without_touching_the_source() {
         "{}",
         r.stdout
     );
-    assert!(r
-        .stdout
-        .contains("pgx clone myapp_template agent-1 --ttl 2h"));
+    assert!(r.stdout.contains("pgx branch myapp_template agent-1"));
     assert!(r.stderr.contains("✓ publish"), "{}", r.stderr);
     // The source password must never appear anywhere in the output.
     assert!(!r.stdout.contains(&src.password) && !r.stderr.contains(&src.password));
@@ -472,6 +470,47 @@ fn f_postgres_and_pgx_coexist_on_different_ports() {
     let url = p.run(&["url", "agent-1"]).stdout.trim().to_string();
     assert!(url.contains(&format!(":{}/agent-1", p.port)), "{url}");
     assert!(!url.contains(&format!(":{}/", src.port)));
+}
+
+#[test]
+fn c2_copy_then_branch_is_the_two_command_workflow() {
+    // The product story in two commands: import once, then a branch per agent.
+    let src = source_with_app();
+    let p = pgx_up();
+    let before = src.fingerprint("myapp");
+    assert_eq!(p.copy(&src, "myapp", "myapp", &[]).code, 0);
+    let mut urls = Vec::new();
+    for agent in ["agent-1", "agent-2"] {
+        let r = p.run(&["branch", "myapp", agent]);
+        assert_eq!(r.code, 0, "{}", r.all());
+        assert!(r.stdout.contains("✓ Expires in: 2 hours"), "{}", r.stdout);
+        urls.push(r.stdout.trim_end().lines().last().unwrap().to_string());
+    }
+    for (agent, url) in ["agent-1", "agent-2"].iter().zip(&urls) {
+        assert!(url.ends_with(&format!("/{agent}")), "{url}");
+        assert_eq!(count(&p, agent, "SELECT count(*) FROM posts"), "20000");
+    }
+    assert_eq!(
+        p.psql("agent-1", "DELETE FROM posts WHERE id <= 5000").code,
+        0
+    );
+    assert_eq!(count(&p, "agent-1", "SELECT count(*) FROM posts"), "15000");
+    assert_eq!(count(&p, "agent-2", "SELECT count(*) FROM posts"), "20000");
+    assert_eq!(count(&p, "myapp", "SELECT count(*) FROM posts"), "20000");
+    let ls = p.run(&["--json", "ls"]).json();
+    let ttl_of = |n: &str| {
+        ls.as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["name"] == n)
+            .unwrap()["ttl"]
+            .clone()
+    };
+    assert_eq!(ttl_of("myapp"), "unlimited");
+    assert_eq!(ttl_of("agent-1"), "2h");
+    assert_eq!(ttl_of("agent-2"), "2h");
+    // The PostgreSQL source was only ever read.
+    assert_eq!(src.fingerprint("myapp"), before);
 }
 
 #[test]

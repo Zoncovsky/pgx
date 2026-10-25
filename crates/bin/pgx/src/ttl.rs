@@ -130,6 +130,32 @@ pub fn humanize_remaining(expires_at: Option<u64>, now: u64) -> String {
     shown.join(" ")
 }
 
+/// `2 hours`, `30 minutes`, `1 hour 30 minutes`, `45 seconds`, `3 days`: the
+/// two most-significant non-zero units, spelled out, for `pgx branch`'s summary.
+pub fn humanize_long(secs: u64) -> String {
+    if secs == 0 {
+        return "0 seconds".to_string();
+    }
+    let d = secs / 86_400;
+    let h = secs % 86_400 / 3_600;
+    let m = secs % 3_600 / 60;
+    let s = secs % 60;
+    let parts = [(d, "day"), (h, "hour"), (m, "minute"), (s, "second")];
+    parts
+        .iter()
+        .filter(|(v, _)| *v != 0)
+        .take(2)
+        .map(|(v, unit)| {
+            if *v == 1 {
+                format!("1 {unit}")
+            } else {
+                format!("{v} {unit}s")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Compact a whole-seconds duration into a short label, preferring a single
 /// unit when it divides evenly (`300` -> `5m`), else a two-unit composite.
 fn compact_duration(mut secs: u64) -> String {
@@ -162,6 +188,18 @@ fn compact_duration(mut secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_humanizer_spells_out_two_units() {
+        assert_eq!(humanize_long(7_200), "2 hours");
+        assert_eq!(humanize_long(1_800), "30 minutes");
+        assert_eq!(humanize_long(5_400), "1 hour 30 minutes");
+        assert_eq!(humanize_long(45), "45 seconds");
+        assert_eq!(humanize_long(3 * 86_400), "3 days");
+        assert_eq!(humanize_long(86_400 + 60), "1 day 1 minute");
+        assert_eq!(humanize_long(3_661), "1 hour 1 minute");
+        assert_eq!(humanize_long(0), "0 seconds");
+    }
 
     #[test]
     fn parses_canonical_durations() {

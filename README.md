@@ -339,7 +339,8 @@ every other `pgx` command works the same way through npx:
 ```bash
 npx pgxdb url app                      # its connection URL
 npx pgxdb ls                           # databases, TTL, expiry, size
-npx pgxdb clone app agent-001 --ttl 5m # a 5-minute copy-on-write branch
+npx pgxdb branch app agent-001         # a disposable 2-hour branch for one agent
+npx pgxdb clone app pr-123 --ttl 5m    # a 5-minute copy-on-write clone
 npx pgxdb --json ls                    # machine-readable output for agents
 npx pgxdb stop
 ```
@@ -369,11 +370,17 @@ it cleans itself up — a branch per agent, pull request or CI job that you
 never have to remember to delete.
 
 ```bash
-pgx clone myapp pr-123 --ttl 30m   # a 30-minute branch of myapp for one PR
+pgx branch myapp agent-1           # an agent's own database; expires in 2 hours
+pgx branch myapp agent-2 --ttl 30m # same, with a shorter TTL
+pgx clone myapp pr-123 --ttl 30m   # a clone; permanent unless you give a TTL
 pgx create scratch --ttl 2h        # a throwaway database, gone in 2 hours
 pgx ls                             # shows each database's TTL and expiry
 pgx ttl pr-123 unlimited           # changed your mind — keep it for good
 ```
+
+`pgx branch` is `pgx clone` for agents: a 2-hour TTL by default and the
+connection URL as the last line of output, so an agent can be handed
+`DATABASE_URL="$(pgx branch myapp agent-1 | tail -1)"` or read `--json`.
 
 Databases created without `--ttl` are permanent. A background supervisor
 drops each temporary database shortly after its deadline, never touches
@@ -385,14 +392,28 @@ permanent or system databases, and resumes cleanup automatically after a
 
 Already have a PostgreSQL database? Copy it into PGX once, then give every
 agent its own branch. The source is only read; PostgreSQL stays your source of
-truth.
+truth. Two commands explain the product:
 
 ```bash
-PGX_PORT=5433 npx pgxdb@latest                       # PGX beside PostgreSQL on 5432
-pgx copy --from "$DATABASE_URL" --to myapp_template   # pg_dump → pg_restore, read-only
-pgx clone myapp_template agent-1 --ttl 2h             # isolated branches, self-expiring
-pgx clone myapp_template agent-2 --ttl 2h
-pgx url agent-1                                       # each agent gets its own URL
+PGX_PORT=5433 npx pgxdb@latest                 # PGX beside PostgreSQL on 5432
+
+# Import PostgreSQL once (pg_dump → pg_restore, read-only on the source)
+pgx copy --from "$DATABASE_URL" --to myapp
+
+# Give each AI agent its own database (isolated, self-expiring after 2h)
+pgx branch myapp agent-1
+pgx branch myapp agent-2
+pgx branch myapp agent-3 --ttl 30m             # optional custom TTL
+```
+
+```console
+$ pgx branch myapp agent-1
+✓ Branch created: agent-1
+✓ Source: myapp
+✓ Expires in: 2 hours
+
+DATABASE_URL:
+postgres://postgres:…@127.0.0.1:5433/agent-1
 ```
 
 `--schema-only` copies the structure without the rows. The copy needs

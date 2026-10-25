@@ -7,6 +7,7 @@ jobs and feature work safe to create freely — they clean themselves up.
 ```bash
 pgx create agent-001 --ttl 5m      # expires 5 minutes after creation
 pgx clone myapp feature-x --ttl 1h # a disposable clone
+pgx branch myapp agent-1           # a clone for one agent: 2h TTL unless --ttl says otherwise
 pgx ttl agent-001 30m              # change the TTL
 pgx ttl agent-001 unlimited        # make it permanent
 pgx ttl agent-001                  # show the current TTL
@@ -23,7 +24,9 @@ fractional, unit-less and over-cap values are rejected.
 ## Unlimited is the default — and never inherited
 
 `pgx create myapp` and `pgx clone myapp x` create **permanent** databases: no
-TTL, never auto-deleted. A TTL applies only when you pass `--ttl`. A clone never
+TTL, never auto-deleted. A TTL applies only when you pass `--ttl`. The one
+exception is `pgx branch`, whose default is `--ttl 2h` (pass `--ttl unlimited`
+for a permanent branch). A clone never
 inherits its source's TTL — you set it explicitly or it is unlimited. There is
 no metadata record for a permanent database, so nothing can ever mark it for
 deletion.

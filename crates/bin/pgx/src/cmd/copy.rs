@@ -997,7 +997,7 @@ fn run_inner(out: &Out, opts: Opts) -> Result<ExitCode> {
     let url = crate::cmd::db::tcp_url(&ctx, dest.as_str());
     let duration_ms = t_all.elapsed().as_millis() as u64;
     let text = format!(
-        "\nDatabase ready: {dest} ({})\n  url  {url}\n\nNext:\n  pgx clone {dest} agent-1 --ttl 2h\n  pgx url agent-1",
+        "\nDatabase ready: {dest} ({})\n  url  {url}\n\nNext:\n  pgx branch {dest} agent-1",
         human_bytes(size)
     );
     out.emit(

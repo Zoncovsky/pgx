@@ -1,18 +1,18 @@
 # Keep your Postgres. Give every AI agent its own database.
 
 `pgx copy` imports an existing PostgreSQL database into your local PGX runtime
-once. From that template, `pgx clone` hands each coding agent, pull request or
+once. From that template, `pgx branch` hands each coding agent, pull request or
 test run its own isolated, disposable database in milliseconds. Your
 PostgreSQL installation is never modified and stays the source of truth.
 
 ```
 Local PostgreSQL (port 5432)          PGX runtime (port 5433)
 ┌──────────────┐    pgx copy          ┌───────────────────────────┐
-│    myapp     │ ───────────────────▶ │ myapp_template            │
-└──────────────┘  pg_dump│pg_restore  │   ├─ agent-1   (pgx clone)│
-                  read-only            │   ├─ agent-2              │
-                                       │   ├─ pr-123   --ttl 2h    │
-                                       │   └─ test-456             │
+│    myapp     │ ───────────────────▶ │ myapp                     │
+└──────────────┘  pg_dump│pg_restore  │   ├─ agent-1  (pgx branch)│
+                  read-only            │   ├─ agent-2    2h TTL    │
+                                       │   ├─ agent-3  --ttl 30m   │
+                                       │   └─ pr-123               │
                                        └───────────────────────────┘
 ```
 
@@ -23,22 +23,35 @@ Local PostgreSQL (port 5432)          PGX runtime (port 5433)
 #    afterwards the saved configuration is used).
 PGX_PORT=5433 npx pgxdb@latest
 
-# 2. Copy your database into PGX as a template. The URL is only read.
-pgx copy --from "$DATABASE_URL" --to myapp_template
+# 2. Import your database into PGX once. The URL is only read.
+pgx copy --from "$DATABASE_URL" --to myapp
 
-# 3. Branch it for your agents. Each branch is independent and self-expiring.
-pgx clone myapp_template agent-1 --ttl 2h
-pgx clone myapp_template agent-2 --ttl 2h
-
-# 4. Hand each agent its own connection URL.
-pgx url agent-1
-pgx url agent-2
+# 3. Give each agent its own database. Each branch is independent and expires
+#    after 2 hours unless you say otherwise; its last output line is the URL.
+pgx branch myapp agent-1
+pgx branch myapp agent-2
+pgx branch myapp agent-3 --ttl 30m
 
 pgx ls               # name, status, TTL, size
 pgx drop agent-1     # or just let the TTL expire
 ```
 
-What you see:
+```console
+$ pgx branch myapp agent-1
+✓ Branch created: agent-1
+✓ Source: myapp
+✓ Expires in: 2 hours
+
+DATABASE_URL:
+postgres://postgres:…@127.0.0.1:5433/agent-1
+```
+
+For scripts and agents: `DATABASE_URL="$(pgx branch myapp agent-1 | tail -1)"`,
+or `pgx --json branch myapp agent-1` for the same fields as one JSON object.
+`pgx branch` is `pgx clone` with a 2-hour default TTL and this output; `pgx
+clone` is unchanged (permanent by default).
+
+What `pgx copy` shows:
 
 ```console
 $ pgx copy --from "$DATABASE_URL" --to myapp_template
@@ -57,8 +70,7 @@ Database ready: myapp_template (31.0 MB)
   url  postgres://postgres:…@127.0.0.1:5433/myapp_template
 
 Next:
-  pgx clone myapp_template agent-1 --ttl 2h
-  pgx url agent-1
+  pgx branch myapp_template agent-1
 ```
 
 Progress lines go to stderr; the summary (or, with `--json`, one JSON object)
@@ -72,13 +84,12 @@ seed it, then branch it.
 ```sh
 npx pgxdb@latest
 DATABASE_URL="$(pgx url app)" bin/rails db:migrate db:seed
-pgx clone app agent-1 --ttl 2h
-pgx url agent-1
+pgx branch app agent-1
 ```
 
-## `pgx copy` versus `pgx clone`
+## `pgx copy` versus `pgx branch`
 
-| | `pgx copy` | `pgx clone` |
+| | `pgx copy` | `pgx branch` (and `pgx clone`) |
 |---|---|---|
 | From → to | external PostgreSQL → PGX | PGX database → PGX database |
 | Mechanism | logical: `pg_dump` and `pg_restore` | physical: `CREATE DATABASE … STRATEGY = FILE_COPY`, block-cloned on APFS/ZFS/reflink filesystems |
@@ -86,7 +97,9 @@ pgx url agent-1
 | How often | once per template, and again to refresh it | once per agent, PR or test run |
 | Source | only read, never modified | not modified; must have no open sessions during the clone |
 
-Copy once, clone many times. `pgx copy` does not change what `pgx clone` does.
+Copy once, branch many times. `pgx branch` and `pgx clone` share one
+implementation: `branch` defaults to a 2-hour TTL and prints the URL last,
+`clone` defaults to permanent. `pgx copy` changes neither.
 
 ## Command
 

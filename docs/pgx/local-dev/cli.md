@@ -42,9 +42,20 @@ Connect:
 | `pgx create <db> [--ttl <dur>]` | Create an empty database. `--ttl` makes it temporary (auto-expires); default is permanent. |
 | `pgx drop <db> [--force]` | Drop it; without `--force`, exit 6 if sessions are connected (data untouched); `--force` terminates them first. |
 | `pgx clone <src> <dst> [--ttl <dur>]` | Copy-on-write clone (`CREATE DATABASE … STRATEGY = FILE_COPY`); shares blocks on APFS/ZFS/reflink filesystems. TTL is never inherited from the source. |
+| `pgx branch <source> <name> [--ttl <dur>]` | A disposable database for one agent: the same clone, with a **2h default TTL** (`--ttl 30m`, or `--ttl unlimited` for a permanent branch) and the connection URL printed as the last line, so `DATABASE_URL="$(pgx branch myapp agent-1 \| tail -1)"` works. Refuses an existing name (exit 4) and a missing source (exit 5) without changing anything. `--json` returns `branch`, `source`, `url`, `socket_url`, `ttl`, `ttl_seconds`, `expires_at`, `expires_in_seconds`, `method`, `elapsed_ms`. |
 | `pgx ls` | List databases with status, TTL, remaining time and size. |
 | `pgx ttl <db> [<dur>\|unlimited]` | Show a database's TTL, or set/extend/disable it. See [ttl.md](ttl.md). |
 | `pgx url <db> [--socket]` | Print the connection URL (TCP with password, or Unix socket). |
+
+```console
+$ pgx branch myapp agent-1
+✓ Branch created: agent-1
+✓ Source: myapp
+✓ Expires in: 2 hours
+
+DATABASE_URL:
+postgres://postgres:…@127.0.0.1:5433/agent-1
+```
 
 ## Import from PostgreSQL
 

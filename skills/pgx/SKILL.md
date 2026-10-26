@@ -14,7 +14,7 @@ description: >
 license: AGPL-3.0
 metadata:
   author: pgrundev
-  version: "0.1.0"
+  version: "0.1.1"
   homepage: https://pgx.dev
   repository: https://github.com/pgrundev/pgx
 ---
@@ -76,12 +76,16 @@ in one line each; do not paste raw terminal output unless something failed.
 ### 1. Detect the project
 
 ```sh
-bash .claude/skills/pgx/scripts/detect-project.sh .     # Claude Code install location
+bash .claude/skills/pgx/scripts/detect-project.sh .     # Claude Code, installed with the Skills CLI
 bash .agents/skills/pgx/scripts/detect-project.sh .     # Codex and Cursor install location
+bash "${CLAUDE_PLUGIN_ROOT}/skills/pgx/scripts/detect-project.sh" .   # Claude Code plugin (/pgx:pgx)
 ```
 
 (The script sits next to this file under `scripts/`; pass the project
-directory as its argument. It prints one JSON object.)
+directory as its argument. It prints one JSON object. Installed as a Claude
+Code plugin, `${CLAUDE_PLUGIN_ROOT}` is replaced by the plugin's directory
+when the skill loads; the base directory reported with the skill is this
+file's own directory and works too.)
 
 Read `framework`, `migrations`, `database_config.classification` and `pgx`.
 Classifications: `local` (a PostgreSQL on this machine), `pgx` (already a
@@ -94,7 +98,8 @@ PGX database), `none` (no database yet), `remote` (another host),
 PGX **0.1.1 or newer** is required. Run the check script next to this file:
 
 ```sh
-bash .claude/skills/pgx/scripts/check-pgx.sh     # or .agents/skills/pgx/scripts/check-pgx.sh
+bash .claude/skills/pgx/scripts/check-pgx.sh     # or .agents/skills/pgx/scripts/check-pgx.sh,
+                                                 # or "${CLAUDE_PLUGIN_ROOT}/skills/pgx/scripts/check-pgx.sh" (plugin)
 ```
 
 It prints `{"ok":true,"version":…}` and exits 0 for a compatible binary;

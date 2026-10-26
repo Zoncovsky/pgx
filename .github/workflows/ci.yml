@@ -124,6 +124,21 @@ jobs:
           npx -y skills@latest add "$GITHUB_WORKSPACE/skills/pgx" -a claude-code codex cursor -y
           test -f .claude/skills/pgx/SKILL.md && test -f .agents/skills/pgx/SKILL.md
           test ! -e .claude/skills/pgx/tests
+  plugin:
+    name: Claude Code plugin (marketplace, manifest, install cycle)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install the Claude Code CLI (pinned; validate/install need no login)
+        run: npm install -g @anthropic-ai/claude-code@2.1.310 && claude --version
+      - name: Plugin package tests (drift, manifests, hygiene, isolated install cycle)
+        run: plugins/tests/pgx/run.sh
+      - name: Secret scan of the plugin package and marketplace (gitleaks)
+        run: |
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz gitleaks
+          for d in plugins .claude-plugin skills; do ./gitleaks dir "$d" --no-banner --redact; done
   docker:
     name: Docker image (${{ matrix.os }})
     strategy:

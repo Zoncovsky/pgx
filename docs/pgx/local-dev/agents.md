@@ -5,10 +5,23 @@ Code, Cursor or Codex session that touches your database works in its own
 disposable branch of a template, created in milliseconds, never shared, and
 cleaned up on its own. Your real PostgreSQL is read once and never written.
 
+```text
+/plugin marketplace add pgrundev/pgx        # Claude Code: the Skill as a native plugin, inside a session
+/plugin install pgx@pgrundev
+```
+
 ```sh
-npx skills add pgrundev/pgx --skill pgx     # the Skill (recommended)
+npx skills add pgrundev/pgx --skill pgx     # any host (Claude Code, Cursor, Codex): the Skills CLI
 npx pgxdb@latest                            # PGX itself, if you prefer to install it by hand
 ```
+
+Three channels, one Skill: the Claude Code plugin (native install, `/plugin`
+manages updates and removal, skill name `/pgx:pgx`), the Agent Skills CLI
+(copies the Skill into the project for every supported host, skill name
+`/pgx` in Claude Code) and the PGX CLI itself for manual use. The plugin and
+the Skills CLI copy are the same files; see
+[claude-plugin.md](claude-plugin.md) for the differences and for running
+both.
 
 Then open your agent in the project and ask it to set PGX up:
 

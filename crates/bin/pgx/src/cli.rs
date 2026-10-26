@@ -92,6 +92,8 @@ pub enum Command {
     },
     /// `pgx copy --from <url> --to <db>`: import an external PostgreSQL database.
     Copy(crate::cmd::copy::Opts),
+    /// `pgx agent …`: one isolated database per coding-agent session.
+    Agent(crate::cmd::agent::AgentCmd),
     Doctor,
     /// Hidden: the background TTL cleanup worker, spawned by start/run/serve.
     Supervise,
@@ -102,8 +104,19 @@ pub enum Command {
 pub fn parse(args: &[String]) -> Result<(Global, Command)> {
     let mut global = Global::default();
     let mut rest: Vec<&str> = Vec::new();
+    // Everything after a bare `--` belongs to a child command (`pgx agent
+    // exec -- codex --json`), so global flags stop there.
+    let mut passthrough = false;
     for a in args {
+        if passthrough {
+            rest.push(a.as_str());
+            continue;
+        }
         match a.as_str() {
+            "--" => {
+                passthrough = true;
+                rest.push("--");
+            }
             "--json" => global.json = true,
             "--help" | "-h" => return Ok((global, Command::Help)),
             "--version" | "-V" => return Ok((global, Command::Version)),
@@ -113,6 +126,9 @@ pub fn parse(args: &[String]) -> Result<(Global, Command)> {
     let Some((&name, tail)) = rest.split_first() else {
         return Ok((global, Command::Help));
     };
+    if name == "agent" {
+        return Ok((global, Command::Agent(crate::cmd::agent::parse(tail)?)));
+    }
     let mut positional: Vec<&str> = Vec::new();
     let mut flags: Vec<(&str, Option<&str>)> = Vec::new();
     let mut i = 0;
@@ -370,6 +386,18 @@ Import from PostgreSQL
   TTL durations: 30s 5m 15m 1h 6h 24h 7d (general s/m/h/d), or `unlimited`
   (the default). Temporary databases are removed automatically by a background
   worker; permanent databases are never auto-deleted.
+
+Agents (one isolated database per coding-agent session)
+  pgx agent setup [--source <db>] [--hosts claude,cursor,codex] [--scope project|local|user]
+                          one-time project setup: writes .pgx.toml, installs lifecycle
+                          hooks for the detected hosts, verifies them
+  pgx agent doctor        check hooks, .pgx.toml, the source template, the runtime
+  pgx agent exec [--source <db>] [--ttl <dur>] [--keep] -- <command> [args…]
+                          run any command (codex, tests, a script) with its own branch
+                          in DATABASE_URL; retire the branch when it exits
+  pgx agent ls            agent branches: host, session, source, expires-in
+  pgx agent up|touch|down|env|hook|install|uninstall
+                          lifecycle primitives (see docs/pgx/local-dev/agents.md)
 
 Tools
   pgx doctor              check the installation, data directory, port, storage
@@ -678,5 +706,101 @@ mod tests {
         }
         assert!(h.contains("--json"));
         assert!(h.contains("Exit codes"));
+    }
+
+    #[test]
+    fn agent_exec_keeps_everything_after_double_dash() {
+        let (g, c) = parse(&args("agent exec --source tpl -- codex --json x")).unwrap();
+        assert!(!g.json, "--json after -- belongs to the child");
+        match c {
+            Command::Agent(crate::cmd::agent::AgentCmd::Exec(o)) => {
+                assert_eq!(o.source.as_deref(), Some("tpl"));
+                assert_eq!(o.command, vec!["codex", "--json", "x"]);
+                assert!(!o.keep);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn agent_requires_a_subcommand_and_rejects_unknown_ones() {
+        assert_eq!(parse(&args("agent")).unwrap_err().code, ExitCode::Usage);
+        assert_eq!(
+            parse(&args("agent frobnicate")).unwrap_err().code,
+            ExitCode::Usage
+        );
+        assert_eq!(
+            parse(&args("agent exec")).unwrap_err().code,
+            ExitCode::Usage
+        );
+        assert_eq!(
+            parse(&args("agent up --bogus 1")).unwrap_err().code,
+            ExitCode::Usage
+        );
+    }
+
+    #[test]
+    fn agent_subcommands_parse_their_options() {
+        use crate::cmd::agent::{AgentCmd, Scope};
+        let (g, c) = parse(&args(
+            "--json agent up --id abc --host claude --ttl 1h --env",
+        ))
+        .unwrap();
+        assert!(g.json);
+        match c {
+            Command::Agent(AgentCmd::Up(o)) => {
+                assert_eq!(o.id.as_deref(), Some("abc"));
+                assert_eq!(o.host.as_deref(), Some("claude"));
+                assert_eq!(o.ttl.as_deref(), Some("1h"));
+                assert!(o.env);
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse(&args("agent down --id abc --now")).unwrap().1 {
+            Command::Agent(AgentCmd::Down(o)) => assert!(o.now && o.grace.is_none()),
+            other => panic!("{other:?}"),
+        }
+        match parse(&args(
+            "agent install claude cursor --scope local --source tpl",
+        ))
+        .unwrap()
+        .1
+        {
+            Command::Agent(AgentCmd::Install(o)) => {
+                assert_eq!(o.hosts, vec!["claude", "cursor"]);
+                assert_eq!(o.scope, Scope::Local);
+                assert_eq!(o.source.as_deref(), Some("tpl"));
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse(&args("agent setup --hosts claude,codex --no-hooks"))
+            .unwrap()
+            .1
+        {
+            Command::Agent(AgentCmd::Setup(o)) => {
+                assert_eq!(o.hosts, vec!["claude", "codex"]);
+                assert!(o.no_hooks);
+                assert_eq!(o.scope, Scope::Project);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            parse(&args("agent ls")).unwrap().1,
+            Command::Agent(AgentCmd::Ls)
+        ));
+        assert!(matches!(
+            parse(&args("agent doctor")).unwrap().1,
+            Command::Agent(AgentCmd::Doctor)
+        ));
+        assert!(matches!(
+            parse(&args("agent hook --host cursor")).unwrap().1,
+            Command::Agent(AgentCmd::Hook(_))
+        ));
+    }
+
+    #[test]
+    fn help_mentions_agent() {
+        assert!(help_text().contains("pgx agent setup"));
+        assert!(help_text().contains("pgx agent exec"));
     }
 }

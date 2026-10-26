@@ -5,6 +5,31 @@ hook's exports reached Bash tool commands, the session id matched
 `CLAUDE_CODE_SESSION_ID`, PreToolUse and SessionEnd fired, SessionEnd fired on
 a normal headless exit.
 
+## Two ways to install the skill in Claude Code
+
+- **Plugin (native)**: `/plugin marketplace add pgrundev/pgx` then
+  `/plugin install pgx@pgrundev` inside a session (shell:
+  `claude plugin marketplace add pgrundev/pgx && claude plugin install
+  pgx@pgrundev`). The skill is namespaced `/pgx:pgx`; `claude plugin list`
+  shows `pgx@pgrundev`, `claude plugin update pgx@pgrundev` upgrades it,
+  `/plugin uninstall pgx@pgrundev` removes it (the skill only: databases,
+  templates, `.pgx.toml` and project hooks are untouched).
+- **Skills CLI**: `npx skills add pgrundev/pgx --skill pgx` copies the skill
+  into `.claude/skills/pgx` (plus `.agents/skills/pgx` for Cursor and Codex).
+  It loads as the plain skill `/pgx`.
+
+Both copies are the same skill. With both installed, Claude Code lists `/pgx`
+and `/pgx:pgx` side by side and either runs the same workflow; nothing is
+duplicated at the database level because hooks and branches come from `pgx
+agent setup`, never from the skill files. To keep one copy, remove the Skills
+CLI one with `npx skills remove pgx` or the plugin with `/plugin uninstall
+pgx@pgrundev`.
+
+The plugin contains no hooks: `pgx agent setup` installs the project's hooks
+into `.claude/settings.json` (idempotent, ownership-checked, see
+[agent-lifecycle.md](agent-lifecycle.md)), so a plugin installed at user scope
+does nothing in projects that have not opted in with `.pgx.toml`.
+
 ## How it works
 
 `pgx agent setup` (or `pgx agent install claude`) adds four entries to

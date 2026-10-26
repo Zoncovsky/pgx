@@ -12,8 +12,14 @@
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
 </p>
 
+```text
+# Claude Code: install inside a session (native plugin)
+/plugin marketplace add pgrundev/pgx
+/plugin install pgx@pgrundev
+```
+
 ```bash
-# Recommended: AI coding agents (Claude Code, Cursor, Codex)
+# Any agent host (Claude Code, Cursor, Codex): the Agent Skills CLI
 npx skills add pgrundev/pgx --skill pgx
 
 # Manual PGX installation
@@ -396,13 +402,30 @@ permanent or system databases, and resumes cleanup automatically after a
 
 ### Every AI agent gets its own Postgres
 
-Install the Skill in a project, then ask your agent:
+Install the Skill, then ask your agent. In Claude Code, from inside a session:
+
+```text
+/plugin marketplace add pgrundev/pgx
+/plugin install pgx@pgrundev
+/pgx:pgx Set up isolated Postgres databases for this project.
+```
+
+For Cursor, Codex or several hosts at once, the Agent Skills CLI installs the
+same Skill into the project:
 
 ```bash
 npx skills add pgrundev/pgx --skill pgx
 ```
 
 > Use PGX to give this project isolated databases for coding agents. Set everything up.
+
+The plugin is the Skill packaged for Claude Code's plugin manager (`/plugin`
+lists, updates and removes it; the skill is `/pgx:pgx` and Claude also picks
+it up on its own when a task touches the database). The Skills CLI copies
+the Skill into `.claude/skills/pgx` and `.agents/skills/pgx` for every host.
+Both contain no hooks and install no database engine: the `pgx` binary is
+installed when the Skill first needs it, with your approval. Details and the
+differences: [`docs/pgx/local-dev/claude-plugin.md`](docs/pgx/local-dev/claude-plugin.md).
 
 The agent detects your database setup, installs PGX if needed, imports your
 development database **schema-only** into a template (`pgx copy`), writes a
@@ -563,6 +586,7 @@ any semantic difference (`classify-regress-diffs.py --fail-on-semantic`).
 | [`v0.1-readiness.md`](docs/pgx/v0.1-readiness.md) | what is ready, known limitations, approved use |
 | [`linux-results.md`](docs/pgx/linux-results.md) | the full benchmark report |
 | [`compatibility-gate.md`](docs/pgx/compatibility-gate.md) | how to decide whether a database can run on PGX |
+| [`local-dev/claude-plugin.md`](docs/pgx/local-dev/claude-plugin.md) | the PGX plugin for Claude Code: `/plugin marketplace add pgrundev/pgx`, `/plugin install pgx@pgrundev`, how it relates to the Skills CLI install, updates, removal |
 | [`local-dev/agents.md`](docs/pgx/local-dev/agents.md) | the PGX Skill and `pgx agent`: automatic per-session isolation for Claude Code, Cursor and Codex, with the compatibility matrix |
 | [`local-dev/copy.md`](docs/pgx/local-dev/copy.md) | `pgx copy`: import an existing PostgreSQL database and branch it per agent |
 | [`pgrun-integration.md`](docs/pgx/pgrun-integration.md) | the host-agent API PGRun builds against |

@@ -5,10 +5,23 @@ Code, Cursor or Codex session that touches your database works in its own
 disposable branch of a template, created in milliseconds, never shared, and
 cleaned up on its own. Your real PostgreSQL is read once and never written.
 
+```text
+/plugin marketplace add pgrundev/pgx        # Claude Code: the Skill as a native plugin, inside a session
+/plugin install pgx@pgrundev
+```
+
 ```sh
-npx skills add pgrundev/pgx --skill pgx     # the Skill (recommended)
+npx skills add pgrundev/pgx --skill pgx     # any host (Claude Code, Cursor, Codex): the Skills CLI
 npx pgxdb@latest                            # PGX itself, if you prefer to install it by hand
 ```
+
+Three channels, one Skill: the Claude Code plugin (native install, `/plugin`
+manages updates and removal, skill name `/pgx:pgx`), the Agent Skills CLI
+(copies the Skill into the project for every supported host, skill name
+`/pgx` in Claude Code) and the PGX CLI itself for manual use. The plugin and
+the Skills CLI copy are the same files; see
+[claude-plugin.md](claude-plugin.md) for the differences and for running
+both.
 
 Then open your agent in the project and ask it to set PGX up:
 
@@ -46,7 +59,7 @@ publishing process.
 
 | Host | Automatic isolation | How | Verified |
 |---|---|---|---|
-| **Claude Code** | Yes | `SessionStart` hook writes the exports to `CLAUDE_ENV_FILE`; `UserPromptSubmit`/`PreToolUse` extend the TTL; `SessionEnd` retires the branch. | **Live, 2026-10-25**: setup from an existing PostgreSQL, feature work in a fresh session, resume within grace, two concurrent sessions. [validation note](validation/2026-10-25-agent-live-claude.md) |
+| **Claude Code** | Yes | `SessionStart` hook writes the exports to `CLAUDE_ENV_FILE`; `UserPromptSubmit`/`PreToolUse` extend the TTL; `SessionEnd` retires the branch. | **Live, 2026-10-25**: setup from an existing PostgreSQL, feature work in a fresh session, resume within grace, two concurrent sessions. [validation note](validation/2026-10-25-agent-live-claude.md). **2026-10-26**: the same through the native plugin (`/plugin install pgx@pgrundev`). [plugin note](validation/2026-10-26-claude-plugin-live.md) |
 | **Cursor** (IDE agent, `agent` CLI) | Hooks installed; env injection pending live verification | `sessionStart` hook answers `{"env": …}`, which Cursor applies to that conversation's shell per its docs. Env is not re-applied to a reopened chat and not inherited by Cursor subagents; cloud agents are skipped. | Payload-level tests only; live run needs `agent login`. [note](validation/2026-10-25-agent-live-cursor.md). Use `pgx agent exec -- <command>` whenever `PGX_ISOLATION` is unset. |
 | **Codex** | With the wrapper | Codex hooks cannot set environment. `pgx agent exec -- codex` puts the branch in Codex's environment; inside any Codex session `pgx agent exec -- <command>` attaches to the session's branch. Lifecycle hooks still create the branch and tell the model. The `workspace-write` sandbox blocks loopback TCP until `sandbox_workspace_write.network_access = true`. | Wrapper verified by tests; native hooks pending a logged-in Codex. [note](validation/2026-10-25-agent-live-codex.md) |
 | Anything else | With the wrapper | `pgx agent exec -- <command>` | `tests/agent_exec.rs`, e2e scenarios C and D |

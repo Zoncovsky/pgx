@@ -55,7 +55,7 @@ pub struct AgentMeta {
 }
 
 impl AgentMeta {
-    fn to_json(&self) -> serde_json::Value {
+    pub fn to_json(&self) -> serde_json::Value {
         json!({
             "host": self.host,
             "session_id": self.session_id,

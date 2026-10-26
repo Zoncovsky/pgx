@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 pub mod identity;
 pub mod project;
+pub mod session;
 
 /// Where hook configuration is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,21 +317,101 @@ pub fn parse(tail: &[&str]) -> Result<AgentCmd> {
 }
 
 pub fn run(out: &Out, cmd: AgentCmd) -> Result<ExitCode> {
-    let _ = out;
-    let name = match cmd {
-        AgentCmd::Up(_) => "up",
-        AgentCmd::Touch(_) => "touch",
-        AgentCmd::Down(_) => "down",
-        AgentCmd::Exec(_) => "exec",
-        AgentCmd::Env(_) => "env",
-        AgentCmd::Ls => "ls",
-        AgentCmd::Hook(_) => "hook",
-        AgentCmd::Install(_) => "install",
-        AgentCmd::Uninstall(_) => "uninstall",
-        AgentCmd::Setup(_) => "setup",
-        AgentCmd::Doctor => "doctor",
-    };
-    Err(PgxError::failure(format!(
-        "pgx agent {name}: not implemented"
-    )))
+    use session::ResolveInput;
+    match cmd {
+        AgentCmd::Up(o) => {
+            let r = session::resolve(&ResolveInput {
+                id: o.id,
+                host: o.host,
+                source: o.source,
+                ttl: o.ttl,
+                cwd: o.cwd,
+                ..Default::default()
+            })?;
+            let res = session::up(out, &r)?;
+            if o.env {
+                print!("{}", session::env_lines(&res));
+            } else {
+                out.emit(&session::up_text(&res), session::up_json(&res));
+            }
+            Ok(ExitCode::Ok)
+        }
+        AgentCmd::Touch(o) => {
+            let r = session::resolve(&ResolveInput {
+                id: o.id,
+                host: o.host,
+                ..Default::default()
+            })?;
+            let t = session::touch(&r)?;
+            let now = crate::fsutil::now_epoch();
+            out.emit(
+                &match (&t.branch, t.skipped) {
+                    (None, _) => "no branch for this session".to_string(),
+                    (Some(b), true) => format!("{b}: recently touched, nothing to do"),
+                    (Some(b), false) => format!(
+                        "{b}: expires in {}",
+                        crate::ttl::humanize_remaining(t.expires_at, now)
+                    ),
+                },
+                serde_json::json!({
+                    "branch": t.branch,
+                    "skipped": t.skipped,
+                    "expires_at": t.expires_at.map(crate::fsutil::rfc3339),
+                    "expires_in_seconds": t.expires_at.map(|e| e.saturating_sub(now)),
+                }),
+            );
+            Ok(ExitCode::Ok)
+        }
+        AgentCmd::Down(o) => {
+            let r = session::resolve(&ResolveInput {
+                id: o.id,
+                host: o.host,
+                grace: o.grace,
+                ..Default::default()
+            })?;
+            let d = session::down(&r, o.now)?;
+            let Some(branch) = d.branch.clone() else {
+                return Err(PgxError::new(
+                    ExitCode::NotFound,
+                    format!("no branch for {} session {}", r.key.host, r.key.session_id),
+                )
+                .hint("`pgx agent ls` lists agent branches"));
+            };
+            let now = crate::fsutil::now_epoch();
+            let text = if d.dropped {
+                format!("dropped {branch}")
+            } else {
+                format!(
+                    "retired {branch}: removed in {} unless the session resumes",
+                    crate::ttl::humanize_remaining(d.retired_until, now)
+                )
+            };
+            out.emit(
+                &text,
+                serde_json::json!({
+                    "branch": branch,
+                    "dropped": d.dropped,
+                    "retired_until": d.retired_until.map(crate::fsutil::rfc3339),
+                    "retired_until_seconds": d.retired_until.map(|e| e.saturating_sub(now)),
+                }),
+            );
+            Ok(ExitCode::Ok)
+        }
+        AgentCmd::Env(o) => {
+            let r = session::resolve(&ResolveInput {
+                id: o.id,
+                host: o.host,
+                ..Default::default()
+            })?;
+            print!("{}", session::env_for_existing(&r)?);
+            Ok(ExitCode::Ok)
+        }
+        AgentCmd::Ls => session::ls(out),
+        AgentCmd::Exec(_) => Err(PgxError::failure("pgx agent exec: not implemented")),
+        AgentCmd::Hook(_) => Err(PgxError::failure("pgx agent hook: not implemented")),
+        AgentCmd::Install(_) => Err(PgxError::failure("pgx agent install: not implemented")),
+        AgentCmd::Uninstall(_) => Err(PgxError::failure("pgx agent uninstall: not implemented")),
+        AgentCmd::Setup(_) => Err(PgxError::failure("pgx agent setup: not implemented")),
+        AgentCmd::Doctor => Err(PgxError::failure("pgx agent doctor: not implemented")),
+    }
 }

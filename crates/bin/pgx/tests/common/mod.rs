@@ -149,6 +149,21 @@ impl Pgx {
             .env("PGX_TTL_INTERVAL", "1")
             .env_remove("PGPORT")
             .env_remove("PGHOST");
+        // Agent-host variables leak in when the suite itself runs inside a
+        // coding agent; the tests set exactly the ones they mean.
+        for v in [
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_ENV_FILE",
+            "CLAUDE_PROJECT_DIR",
+            "CODEX_SESSION_ID",
+            "CODEX_THREAD_ID",
+            "CURSOR_VERSION",
+            "CURSOR_PROJECT_DIR",
+            "PGX_SOURCE",
+            "PGX_AGENT_HOST",
+        ] {
+            c.env_remove(v);
+        }
         c
     }
 

@@ -10,7 +10,7 @@ use std::time::Instant;
 
 type Client = crate::pgwire::Client<std::os::unix::net::UnixStream>;
 
-fn exists(ctx: &Ctx, client: &mut Client, name: &DbName) -> Result<bool> {
+pub(crate) fn exists(ctx: &Ctx, client: &mut Client, name: &DbName) -> Result<bool> {
     let _ = ctx;
     let r = client
         .simple_query(&format!(
@@ -32,6 +32,18 @@ pub fn database_oid(client: &mut Client, name: &str) -> Result<Option<u64>> {
         ))
         .map_err(|e| db_error(e, "cannot read database oid"))?;
     Ok(r.scalar().and_then(|s| s.parse().ok()))
+}
+
+/// Client backends connected to `name` (other than ourselves). A clone source
+/// must have none: `CREATE DATABASE … TEMPLATE` refuses a busy template.
+pub fn active_connections(client: &mut Client, name: &str) -> Result<u64> {
+    let r = client
+        .simple_query(&format!(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = {} AND pid <> pg_backend_pid()",
+            quote_literal(name)
+        ))
+        .map_err(|e| db_error(e, "cannot read pg_stat_activity"))?;
+    Ok(r.scalar().and_then(|s| s.parse().ok()).unwrap_or(0))
 }
 
 /// Apply a `--ttl` choice to a freshly created/cloned database `name`.
@@ -226,7 +238,7 @@ pub struct Cloned {
 /// record the TTL. A refused call creates nothing. The explicit target check
 /// gives a clear message; the engine's own uniqueness check stays the
 /// authority when two calls race for one name (sqlstate 42P04 → exit 4).
-fn clone_database(
+pub(crate) fn clone_database(
     ctx: &Ctx,
     client: &mut Client,
     source: &DbName,
@@ -436,6 +448,7 @@ pub fn ls(out: &Out) -> Result<ExitCode> {
             "ttl_seconds": ttl_seconds,
             "expires_at": expires_at.map(crate::fsutil::rfc3339),
             "expires_in_seconds": expires_at.map(|e| e.saturating_sub(now)),
+            "agent": rec.and_then(|r| r.agent.as_ref()).map(|m| m.to_json()),
         }));
     }
     out.emit(text.trim_end(), json!(items));

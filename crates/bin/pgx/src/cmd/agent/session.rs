@@ -513,10 +513,9 @@ fn sq(v: &str) -> String {
     format!("'{}'", v.replace('\'', "'\\''"))
 }
 
-/// The nine exports a session receives.
-pub fn env_lines(res: &UpResult) -> String {
-    let mut s = String::new();
-    for (k, v) in [
+/// The nine variables a session receives.
+pub fn env_pairs(res: &UpResult) -> Vec<(&'static str, String)> {
+    vec![
         ("DATABASE_URL", res.url.clone()),
         ("PGX_BRANCH", res.branch.as_str().to_string()),
         ("PGX_SOURCE", res.source.clone()),
@@ -526,32 +525,42 @@ pub fn env_lines(res: &UpResult) -> String {
         ("PGPASSWORD", res.password.clone()),
         ("PGDATABASE", res.branch.as_str().to_string()),
         ("PGX_ISOLATION", "ok".to_string()),
-    ] {
-        s.push_str(&format!("export {k}={}\n", sq(&v)));
-    }
-    s
+    ]
+}
+
+/// `export K='v'` lines for `env_pairs`.
+pub fn env_lines(res: &UpResult) -> String {
+    env_pairs(res)
+        .iter()
+        .map(|(k, v)| format!("export {k}={}\n", sq(v)))
+        .collect()
 }
 
 /// Fail closed: a URL that cannot connect, so a session whose isolation failed
 /// never falls back to an inherited database.
-pub fn sentinel_env_lines(reason: &str) -> String {
-    let mut s = String::new();
-    for (k, v) in [
+pub fn sentinel_pairs(reason: &str) -> Vec<(&'static str, String)> {
+    vec![
         (
             "DATABASE_URL",
-            "postgres://pgx-isolation-failed@127.0.0.1:1/pgx_isolation_failed",
+            "postgres://pgx-isolation-failed@127.0.0.1:1/pgx_isolation_failed".to_string(),
         ),
-        ("PGX_ISOLATION", "failed"),
-        ("PGX_ISOLATION_REASON", reason),
-        ("PGHOST", "127.0.0.1"),
-        ("PGPORT", "1"),
-        ("PGUSER", "pgx-isolation-failed"),
-        ("PGDATABASE", "pgx_isolation_failed"),
-    ] {
-        s.push_str(&format!("export {k}={}\n", sq(v)));
-    }
-    s.push_str("unset PGPASSWORD PGX_BRANCH PGX_SOURCE\n");
-    s
+        ("PGX_ISOLATION", "failed".to_string()),
+        ("PGX_ISOLATION_REASON", reason.to_string()),
+        ("PGHOST", "127.0.0.1".to_string()),
+        ("PGPORT", "1".to_string()),
+        ("PGUSER", "pgx-isolation-failed".to_string()),
+        ("PGDATABASE", "pgx_isolation_failed".to_string()),
+        ("PGPASSWORD", String::new()),
+        ("PGX_BRANCH", String::new()),
+        ("PGX_SOURCE", String::new()),
+    ]
+}
+
+pub fn sentinel_env_lines(reason: &str) -> String {
+    sentinel_pairs(reason)
+        .iter()
+        .map(|(k, v)| format!("export {k}={}\n", sq(v)))
+        .collect()
 }
 
 pub fn up_json(res: &UpResult) -> serde_json::Value {

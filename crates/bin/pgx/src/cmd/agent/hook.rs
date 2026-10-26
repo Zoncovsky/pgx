@@ -674,8 +674,8 @@ mod tests {
     fn user_shell_accepts_only_absolute_bourne_shells() {
         let mut env = HashMap::new();
         assert_eq!(user_shell(&env), Path::new("/bin/sh"));
-        env.insert("SHELL".to_string(), "/bin/zsh".to_string());
-        assert_eq!(user_shell(&env), Path::new("/bin/zsh"));
+        env.insert("SHELL".to_string(), "/bin/bash".to_string());
+        assert_eq!(user_shell(&env), Path::new("/bin/bash"));
         env.insert("SHELL".to_string(), "zsh".to_string());
         assert_eq!(user_shell(&env), Path::new("/bin/sh"));
         env.insert("SHELL".to_string(), "/usr/bin/python3".to_string());

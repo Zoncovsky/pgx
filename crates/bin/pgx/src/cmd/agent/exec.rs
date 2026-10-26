@@ -27,22 +27,11 @@ fn install_handlers() {
     }
 }
 
-/// A host label from the command's basename: `codex`, `agent`, `sh`, …
-fn host_from_command(cmd: &str) -> String {
-    let base = std::path::Path::new(cmd)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    let cleaned: String = base
-        .chars()
-        .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        .take(16)
-        .collect();
-    match super::identity::validate_host(&cleaned) {
-        Ok(h) => h,
-        Err(_) => "exec".to_string(),
-    }
-}
+/// The host label of a branch `exec` makes for itself. Always `exec` unless
+/// `--host` says otherwise: the label is part of the branch's identity, and
+/// deriving it from the command name made `pgx agent down --id X` unable to
+/// find a branch made by `pgx agent exec --id X -- sh -c …`.
+pub const EXEC_HOST: &str = "exec";
 
 fn random_id() -> String {
     let mut buf = [0u8; 8];
@@ -58,8 +47,9 @@ fn random_id() -> String {
 
 pub fn run(out: &Out, opts: ExecOpts) -> Result<ExitCode> {
     let program = opts.command[0].clone();
-    // Attach to the surrounding agent session when one is visible, otherwise
-    // this run is its own session.
+    // Attach to the surrounding agent session (or subagent: a routed command
+    // carries PGX_AGENT_ID) when one is visible, otherwise this run is its
+    // own session.
     let attached = opts.id.is_none()
         && ["CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID"]
             .iter()
@@ -69,28 +59,39 @@ pub fn run(out: &Out, opts: ExecOpts) -> Result<ExitCode> {
     } else {
         (
             Some(opts.id.clone().unwrap_or_else(random_id)),
-            Some(
-                opts.host
-                    .clone()
-                    .unwrap_or_else(|| host_from_command(&program)),
-            ),
+            Some(opts.host.clone().unwrap_or_else(|| EXEC_HOST.to_string())),
         )
     };
     let r = session::resolve(&ResolveInput {
         id,
         host,
+        agent_id: opts.agent.clone(),
         source: opts.source.clone(),
         ttl: opts.ttl.clone(),
+        cwd: opts.cwd.clone(),
         ..Default::default()
     })?;
+    let started = Instant::now();
     let res = session::up(&out.quiet(), &r)?;
+    let provision_ms = started.elapsed().as_secs_f64() * 1000.0;
+    for w in &res.guard_warnings {
+        eprintln!("pgx agent exec: guard not applied on {}: {w}", res.branch);
+    }
 
     let mut cmd = std::process::Command::new(&program);
     cmd.args(&opts.command[1..]);
+    // The password travels in the environment, never in an argument. An
+    // inherited PGSERVICE could redirect libpq elsewhere: cleared.
     for (k, v) in session::env_pairs(&res) {
         cmd.env(k, v);
     }
+    for k in ["PGSERVICE", "PGSERVICEFILE"] {
+        cmd.env_remove(k);
+    }
     cmd.env("PGX_AGENT_SESSION", &r.key.session_id);
+    if r.key.agent_id.is_some() {
+        cmd.env("PGX_ROUTED", "1");
+    }
     install_handlers();
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -146,11 +147,22 @@ pub fn run(out: &Out, opts: ExecOpts) -> Result<ExitCode> {
             json!({
                 "branch": res.branch.as_str(),
                 "session_id": r.key.session_id,
+                "agent_id": r.key.agent_id,
                 "host": r.key.host,
+                "source": res.source,
+                // `created`: this run cloned the branch; otherwise it attached
+                // to one that existed (a session's, or an earlier --keep run's).
+                "created": res.created,
+                "fresh": res.fresh,
+                "method": res.method,
+                // Wall time of ensuring the branch, clone included; only
+                // meaningful when it was created, so null otherwise.
+                "elapsed_ms": if res.created { Some((provision_ms * 10.0).round() / 10.0) } else { None },
                 "exit_code": code,
                 "attached": attached,
                 "dropped": outcome == Outcome::Dropped,
-                "retired": outcome == Outcome::Retired,
+                "retired": false,
+                "status": outcome.status(attached),
             })
         );
     }
@@ -160,23 +172,41 @@ pub fn run(out: &Out, opts: ExecOpts) -> Result<ExitCode> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
+    /// Still active, on its idle TTL: an attached session's branch, or `--keep`.
     Kept,
-    Retired,
     Dropped,
 }
 
-/// After the command: leave an attached session alone, retire with `--keep`,
-/// drop otherwise. Failures are reported, never fatal (the command's exit
-/// status is what the caller is waiting for; the TTL is the backstop).
+impl Outcome {
+    fn status(self, attached: bool) -> &'static str {
+        match (self, attached) {
+            (Outcome::Dropped, _) => "dropped",
+            (Outcome::Kept, true) => "attached",
+            (Outcome::Kept, false) => "active",
+        }
+    }
+}
+
+/// After the command: leave an attached session's branch alone; with
+/// `--keep`, leave the branch active for its idle TTL (the next `exec` with
+/// the same id attaches to it, data intact); drop it otherwise. Failures are
+/// reported, never fatal (the command's exit status is what the caller is
+/// waiting for; the TTL is the backstop).
 fn cleanup(r: &session::Resolved, attached: bool, keep: bool) -> Outcome {
     if attached {
         return Outcome::Kept;
     }
-    match session::down(r, !keep) {
+    if keep {
+        if let Err(e) = session::touch(r) {
+            eprintln!("pgx agent exec: could not extend the branch: {e}");
+        }
+        return Outcome::Kept;
+    }
+    match session::down(r, true) {
         Ok(d) if d.dropped => Outcome::Dropped,
-        Ok(_) => Outcome::Retired,
+        Ok(_) => Outcome::Kept,
         Err(e) => {
-            eprintln!("pgx agent exec: could not retire the branch: {e}");
+            eprintln!("pgx agent exec: could not drop the branch: {e}");
             Outcome::Kept
         }
     }

@@ -47,12 +47,16 @@ impl Scope {
 pub struct IdOpts {
     pub id: Option<String>,
     pub host: Option<String>,
+    /// A subagent of the session.
+    pub agent: Option<String>,
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UpOpts {
     pub id: Option<String>,
     pub host: Option<String>,
+    pub agent: Option<String>,
     pub source: Option<String>,
     pub ttl: Option<String>,
     /// Print `export` lines instead of the human block.
@@ -64,19 +68,27 @@ pub struct UpOpts {
 pub struct DownOpts {
     pub id: Option<String>,
     pub host: Option<String>,
+    pub agent: Option<String>,
     /// Drop immediately instead of retiring with a grace period.
     pub now: bool,
     pub grace: Option<String>,
+    /// Act only if the session's branch is this one (a guard against a
+    /// mistyped `--id` retiring somebody else's branch).
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExecOpts {
     pub id: Option<String>,
     pub host: Option<String>,
+    pub agent: Option<String>,
     pub source: Option<String>,
     pub ttl: Option<String>,
-    /// Retire with grace instead of dropping when the command exits.
+    /// Leave the branch active (idle TTL) instead of dropping it when the
+    /// command exits; the next `exec` with the same id attaches to it.
     pub keep: bool,
+    /// Resolve the project from here instead of the current directory.
+    pub cwd: Option<PathBuf>,
     pub command: Vec<String>,
 }
 
@@ -124,7 +136,9 @@ pub enum AgentCmd {
 const USAGE: &str =
     "usage: pgx agent <setup|doctor|exec|ls|up|touch|down|env|hook|install|uninstall> [options]";
 
-const VALUE_FLAGS: [&str; 7] = ["id", "host", "source", "ttl", "grace", "hosts", "scope"];
+const VALUE_FLAGS: [&str; 10] = [
+    "id", "host", "agent", "source", "ttl", "grace", "hosts", "scope", "cwd", "branch",
+];
 const BOOL_FLAGS: [&str; 4] = ["env", "now", "keep", "no-hooks"];
 
 /// Parse everything after `pgx agent`. `--` ends option parsing (for `exec`).
@@ -201,40 +215,46 @@ pub fn parse(tail: &[&str]) -> Result<AgentCmd> {
         Some(s) => Scope::parse(&s)?,
         None => Scope::Project,
     };
+    let cwd_flag = value("cwd").map(PathBuf::from);
     let cmd = match sub {
         "up" => {
-            only(&["id", "host", "source", "ttl", "env"])?;
+            only(&["id", "host", "agent", "source", "ttl", "env", "cwd"])?;
             no_positional(
-                "up [--id <session>] [--host <h>] [--source <db>] [--ttl <dur>] [--env]",
+                "up [--id <session>] [--host <h>] [--agent <id>] [--source <db>] [--ttl <dur>] [--env] [--cwd <dir>]",
             )?;
             AgentCmd::Up(UpOpts {
                 id: value("id"),
                 host: value("host"),
+                agent: value("agent"),
                 source: value("source"),
                 ttl: value("ttl"),
                 env: has("env"),
-                cwd: None,
+                cwd: cwd_flag,
             })
         }
         "touch" => {
-            only(&["id", "host"])?;
-            no_positional("touch [--id <session>] [--host <h>]")?;
+            only(&["id", "host", "agent", "cwd"])?;
+            no_positional("touch [--id <session>] [--host <h>] [--agent <id>]")?;
             AgentCmd::Touch(IdOpts {
                 id: value("id"),
                 host: value("host"),
+                agent: value("agent"),
+                cwd: cwd_flag,
             })
         }
         "env" => {
-            only(&["id", "host"])?;
-            no_positional("env [--id <session>] [--host <h>]")?;
+            only(&["id", "host", "agent", "cwd"])?;
+            no_positional("env [--id <session>] [--host <h>] [--agent <id>] [--cwd <dir>]")?;
             AgentCmd::Env(IdOpts {
                 id: value("id"),
                 host: value("host"),
+                agent: value("agent"),
+                cwd: cwd_flag,
             })
         }
         "down" => {
-            only(&["id", "host", "now", "grace"])?;
-            no_positional("down [--id <session>] [--host <h>] [--now | --grace <dur>]")?;
+            only(&["id", "host", "agent", "now", "grace", "branch", "cwd"])?;
+            no_positional("down [--id <session>] [--host <h>] [--agent <id>] [--branch <name>] [--now | --grace <dur>]")?;
             if has("now") && has("grace") {
                 return Err(PgxError::usage(
                     "pgx agent down: --now and --grace exclude each other",
@@ -243,23 +263,27 @@ pub fn parse(tail: &[&str]) -> Result<AgentCmd> {
             AgentCmd::Down(DownOpts {
                 id: value("id"),
                 host: value("host"),
+                agent: value("agent"),
                 now: has("now"),
                 grace: value("grace"),
+                branch: value("branch"),
             })
         }
         "exec" => {
-            only(&["id", "host", "source", "ttl", "keep"])?;
+            only(&["id", "host", "agent", "source", "ttl", "keep", "cwd"])?;
             if !positional.is_empty() || command.is_empty() {
                 return Err(PgxError::usage(
-                    "usage: pgx agent exec [--source <db>] [--ttl <dur>] [--keep] -- <command> [args…]",
+                    "usage: pgx agent exec [--id <session>] [--agent <id>] [--source <db>] [--ttl <dur>] [--keep] [--cwd <dir>] -- <command> [args…]",
                 ));
             }
             AgentCmd::Exec(ExecOpts {
                 id: value("id"),
                 host: value("host"),
+                agent: value("agent"),
                 source: value("source"),
                 ttl: value("ttl"),
                 keep: has("keep"),
+                cwd: cwd_flag,
                 command,
             })
         }
@@ -333,6 +357,7 @@ pub fn run(out: &Out, cmd: AgentCmd) -> Result<ExitCode> {
             let r = session::resolve(&ResolveInput {
                 id: o.id,
                 host: o.host,
+                agent_id: o.agent,
                 source: o.source,
                 ttl: o.ttl,
                 cwd: o.cwd,
@@ -342,14 +367,19 @@ pub fn run(out: &Out, cmd: AgentCmd) -> Result<ExitCode> {
             if o.env {
                 print!("{}", session::env_lines(&res));
             } else {
+                for w in &res.guard_warnings {
+                    out.note(&format!("guard not applied on {}: {w}", res.branch));
+                }
                 out.emit(&session::up_text(&res), session::up_json(&res));
             }
             Ok(ExitCode::Ok)
         }
         AgentCmd::Touch(o) => {
-            let r = session::resolve(&ResolveInput {
+            let r = session::resolve_by_id(&ResolveInput {
                 id: o.id,
                 host: o.host,
+                agent_id: o.agent,
+                cwd: o.cwd,
                 ..Default::default()
             })?;
             let t = session::touch(&r)?;
@@ -373,17 +403,21 @@ pub fn run(out: &Out, cmd: AgentCmd) -> Result<ExitCode> {
             Ok(ExitCode::Ok)
         }
         AgentCmd::Down(o) => {
-            let r = session::resolve(&ResolveInput {
+            let r = session::resolve_by_id(&ResolveInput {
                 id: o.id,
                 host: o.host,
+                agent_id: o.agent,
                 grace: o.grace,
                 ..Default::default()
             })?;
+            if let Some(b) = &o.branch {
+                session::verify_branch(&r, b)?;
+            }
             let d = session::down(&r, o.now)?;
             let Some(branch) = d.branch.clone() else {
                 return Err(PgxError::new(
                     ExitCode::NotFound,
-                    format!("no branch for {} session {}", r.key.host, r.key.session_id),
+                    format!("no branch for {}", r.key.describe()),
                 )
                 .hint("`pgx agent ls` lists agent branches"));
             };
@@ -400,17 +434,23 @@ pub fn run(out: &Out, cmd: AgentCmd) -> Result<ExitCode> {
                 &text,
                 serde_json::json!({
                     "branch": branch,
+                    "session_id": r.key.session_id,
+                    "agent_id": r.key.agent_id,
                     "dropped": d.dropped,
                     "retired_until": d.retired_until.map(crate::fsutil::rfc3339),
                     "retired_until_seconds": d.retired_until.map(|e| e.saturating_sub(now)),
+                    "backends_terminated": d.backends_terminated,
+                    "backends_remaining": d.backends_remaining,
                 }),
             );
             Ok(ExitCode::Ok)
         }
         AgentCmd::Env(o) => {
-            let r = session::resolve(&ResolveInput {
+            let r = session::resolve_by_id(&ResolveInput {
                 id: o.id,
                 host: o.host,
+                agent_id: o.agent,
+                cwd: o.cwd,
                 ..Default::default()
             })?;
             print!("{}", session::env_for_existing(&r)?);

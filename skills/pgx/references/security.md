@@ -39,3 +39,18 @@ runs in real projects that hold real credentials and real data.
     (install hooks, write `.pgx.toml`, create branches) within granted
     permissions; ask before network installs, data imports, global settings
     changes and anything destructive.
+15. **No credentials in process arguments.** PGX passes the password to
+    child processes in the environment (`PGPASSWORD`, `DATABASE_URL`), never
+    on a command line: a routed subagent command carries only the agent id,
+    the project directory and the original text; `pgx copy` strips it from
+    the URL it hands `pg_dump`. Do the same:
+    `psql -c …` with the `PG*` variables, not `psql "$DATABASE_URL"`, so `ps`
+    shows no secret. Environment variables are not a secrecy boundary against
+    other processes of the same user either; treat a branch's password as
+    local-development material.
+16. **Subagent routing never approves anything.** The `PreToolUse` hook only
+    rewrites a subagent's Bash command to run through `pgx agent exec
+    --agent`, or refuses it; it never returns `allow`, never touches
+    sandboxes or permission rules, and the rewritten command passes through
+    the host's normal permission flow. Whether to allow the wrapper with a
+    rule is the user's decision, never the agent's.

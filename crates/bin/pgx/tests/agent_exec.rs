@@ -80,7 +80,9 @@ fn exec_gives_the_child_its_own_branch_and_retires_it() {
         .lines()
         .find(|l| l.starts_with("BR="))
         .unwrap_or_else(|| panic!("{}", r.all()));
-    assert!(line.contains("BR=agent-sh-"), "{line}");
+    // The host label is `exec` whatever the command is called, so `pgx agent
+    // down --id` can find the branch later.
+    assert!(line.contains("BR=agent-exec-"), "{line}");
     assert!(line.contains("SRC=myapp"), "{line}");
     assert!(line.contains("ISO=ok"), "{line}");
     assert!(line.contains("SESSION="), "{line}");
@@ -231,20 +233,29 @@ fn exec_attaches_to_the_surrounding_session() {
 }
 
 #[test]
-fn exec_keep_retires_with_grace() {
+fn exec_keep_leaves_the_branch_active_for_its_idle_ttl() {
     let (p, proj) = up_with_source();
     let r = exec(
         &p,
         &proj,
         &[],
-        &["--keep", "--id", "keepme-01", "--", "true"],
+        &["--keep", "--id", "keepme-01", "--ttl", "1h", "--", "true"],
     );
     assert_eq!(r.code, 0, "{}", r.all());
     let rows = agent_ls(&p);
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["state"], "retired");
-    assert!(rows[0]["expires_in_seconds"].as_u64().unwrap() <= 600);
+    // `--keep` means: the branch stays, active, on its idle TTL; nothing
+    // about it is "retired" (that word is for a session that ended).
+    assert_eq!(rows[0]["state"], "active");
+    assert_eq!(rows[0]["deadline_kind"], "idle_ttl");
+    let left = rows[0]["expires_in_seconds"].as_u64().unwrap();
+    assert!(left > 3000 && left <= 3600, "{left}");
     assert_eq!(rows[0]["agent"]["session_id"], "keepme-01");
+    assert_eq!(rows[0]["agent"]["host"], "exec");
+    // Without --keep the branch is dropped at exit (as before).
+    let r = exec(&p, &proj, &[], &["--id", "dropme-01", "--", "true"]);
+    assert_eq!(r.code, 0, "{}", r.all());
+    assert_eq!(agent_ls(&p).len(), 1);
 }
 
 #[test]

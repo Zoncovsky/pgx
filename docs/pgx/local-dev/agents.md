@@ -50,16 +50,17 @@ publishing process.
 |---|---|
 | Template | `<app>_template`, a schema-only (or, with your approval, full) copy of your PostgreSQL database, or an empty `app` for a new project. Nothing connects to it; it only gets branched. |
 | Branch per session | `agent-<host>-<8 chars of the session id>`, a copy-on-write clone. Two sessions, two branches; a `claude --worktree` session gets its own. |
-| Environment | `DATABASE_URL`, `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGX_BRANCH`, `PGX_SOURCE`, `PGX_ISOLATION=ok`, present before the agent's first command. |
-| Lifetime | Idle TTL of 2 hours, extended by every prompt and shell command; a 10-minute grace period after the session ends, so a resume finds its data. |
-| Cleanup | The PGX supervisor removes expired branches. `pgx agent ls` shows them; `pgx agent down --now` drops the current one. |
-| Fail closed | If a project has `.pgx.toml` and a branch cannot be made, the session's `DATABASE_URL` is pointed at an unreachable sentinel (`PGX_ISOLATION=failed`) instead of silently inheriting another database. |
+| Branch per subagent | `agent-<host>-<session8>-<agent8>`: every Claude Code subagent gets its own clone of the same source the moment it starts, and its Bash commands are routed to it. Twenty parallel subagents, twenty branches; the parent keeps its own. |
+| Environment | `DATABASE_URL`, `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGX_BRANCH`, `PGX_SOURCE`, `PGX_ISOLATION=ok`, present before the agent's first command (a subagent's commands additionally see `PGX_AGENT_ID` and `PGX_ROUTED=1`). |
+| Lifetime | Idle TTL of 2 hours, extended by every prompt and shell command; a 10-minute grace period after the session or subagent ends, so a resume finds its data. |
+| Cleanup | The PGX supervisor removes expired branches. `pgx agent ls` shows them; `pgx agent down --now` drops the current one. Ending a session or subagent terminates what it left connected to its branch, and every branch carries server-side guards (`client_connection_check_interval`, `idle_in_transaction_session_timeout`, `statement_timeout`) so a killed client's transaction aborts instead of committing later. |
+| Fail closed | If a project has `.pgx.toml` and a branch cannot be made, the session's `DATABASE_URL` is pointed at an unreachable sentinel (`PGX_ISOLATION=failed`) instead of silently inheriting another database; a subagent's Bash command in that situation is refused with the reason. |
 
 ## Host compatibility
 
 | Host | Automatic isolation | How | Verified |
 |---|---|---|---|
-| **Claude Code** | Yes | `SessionStart` hook writes the exports to `CLAUDE_ENV_FILE`; `UserPromptSubmit`/`PreToolUse` extend the TTL; `SessionEnd` retires the branch. | **Live, 2026-10-25**: setup from an existing PostgreSQL, feature work in a fresh session, resume within grace, two concurrent sessions. [validation note](validation/2026-10-25-agent-live-claude.md). **2026-10-26**: the same through the native plugin (`/plugin install pgx@pgrundev`). [plugin note](validation/2026-10-26-claude-plugin-live.md) |
+| **Claude Code** | Yes, sessions and subagents | `SessionStart` hook writes the exports to `CLAUDE_ENV_FILE`; `UserPromptSubmit`/`PreToolUse` extend the TTL; `SessionEnd` retires the branch. `SubagentStart` clones a branch per subagent, `PreToolUse` rewrites each subagent Bash command to run through `pgx agent exec --agent <id>` (`updatedInput`; refused with `deny` when the branch cannot be ensured; the rewritten command still passes the host's permission flow), `SubagentStop` retires it. | **Live, 2026-10-25**: setup from an existing PostgreSQL, feature work in a fresh session, resume within grace, two concurrent sessions. [validation note](validation/2026-10-25-agent-live-claude.md). **2026-10-26**: the same through the native plugin (`/plugin install pgx@pgrundev`). [plugin note](validation/2026-10-26-claude-plugin-live.md). **2026-10-26, subagents**: 3 and then 20 concurrent subagents, each in its own hook-created branch, no ids, no contamination, killed-agent transaction aborted. [subagent note](validation/2026-10-26-subagent-isolation-live.md) |
 | **Cursor** (IDE agent, `agent` CLI) | Hooks installed; env injection pending live verification | `sessionStart` hook answers `{"env": …}`, which Cursor applies to that conversation's shell per its docs. Env is not re-applied to a reopened chat and not inherited by Cursor subagents; cloud agents are skipped. | Payload-level tests only; live run needs `agent login`. [note](validation/2026-10-25-agent-live-cursor.md). Use `pgx agent exec -- <command>` whenever `PGX_ISOLATION` is unset. |
 | **Codex** | With the wrapper | Codex hooks cannot set environment. `pgx agent exec -- codex` puts the branch in Codex's environment; inside any Codex session `pgx agent exec -- <command>` attaches to the session's branch. Lifecycle hooks still create the branch and tell the model. The `workspace-write` sandbox blocks loopback TCP until `sandbox_workspace_write.network_access = true`. | Wrapper verified by tests; native hooks pending a logged-in Codex. [note](validation/2026-10-25-agent-live-codex.md) |
 | Anything else | With the wrapper | `pgx agent exec -- <command>` | `tests/agent_exec.rs`, e2e scenarios C and D |
@@ -102,10 +103,18 @@ pgx branch myapp_template feature-123                              # a hand-made
 
 ## Semantics worth knowing
 
-- **Identity.** A session is `(project, host, session id)`; the branch name
-  is derived from it. The same session id in another project is another
-  branch. Hand-picked ids (`pgx agent exec --id`) shorter than 8 characters
-  or with other characters are hashed into the name.
+- **Identity.** A session is `(project, host, session id)`; a subagent adds
+  the host's agent id; the branch name is derived from the identity. The
+  same session id in another project is another branch; the same agent id
+  in another session is another branch. Hand-picked ids (`pgx agent exec
+  --id`) shorter than 8 characters or with other characters are hashed into
+  the name; `exec` branches are always labelled `exec`, so `pgx agent down
+  --id` finds them.
+- **`--keep`.** `pgx agent exec --keep` leaves the branch active for its
+  idle TTL after the command exits; the next `exec` with the same `--id`
+  attaches to it with its data. Without `--keep` the branch is dropped at
+  exit. "Retired" is reserved for a session or subagent that ended: its
+  branch lives on for the grace period and is revived by a resume.
 - **The source must be idle.** `CREATE DATABASE … TEMPLATE` refuses a busy
   template; `up` fails with exit 6 and says so. Keep `<app>_template` for
   branching only.

@@ -13,6 +13,24 @@ pub const DEFAULT_SOURCE: &str = "app";
 pub const DEFAULT_IDLE_TTL: &str = "2h";
 pub const DEFAULT_GRACE: &str = "10m";
 
+/// Server-side guards set on every agent branch (`ALTER DATABASE … SET`), so
+/// a client that dies mid-transaction (a killed agent) cannot leave a backend
+/// running to its COMMIT: the backend notices the dead client within
+/// `connection_check_interval`, an idle transaction is aborted after
+/// `idle_in_transaction_timeout`, and no single statement runs longer than
+/// `statement_timeout`. `0`/`unlimited` disables one.
+pub const DEFAULT_CONNECTION_CHECK: &str = "5s";
+pub const DEFAULT_IDLE_IN_TRANSACTION: &str = "15m";
+pub const DEFAULT_STATEMENT_TIMEOUT: &str = "1h";
+
+/// The `[agent]` guard settings a project may override.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Guards {
+    pub connection_check_interval: Option<String>,
+    pub idle_in_transaction_timeout: Option<String>,
+    pub statement_timeout: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     /// Canonical project root.
@@ -22,6 +40,7 @@ pub struct ProjectConfig {
     pub source: Option<String>,
     pub idle_ttl: Option<String>,
     pub grace_period: Option<String>,
+    pub guards: Guards,
     /// The `.pgx.toml` that was read, if any.
     pub config_file: Option<PathBuf>,
 }
@@ -66,35 +85,56 @@ pub fn locate(start: &Path, fallbacks: &[PathBuf]) -> Result<ProjectConfig> {
     });
     let (root, config_file) = found.unwrap_or((start.clone(), None));
     let root = canon(&root);
-    let (source, idle_ttl, grace_period) = match &config_file {
+    let parsed = match &config_file {
         Some(f) => {
             let text =
                 std::fs::read_to_string(f).map_err(|e| PgxError::io("cannot read", f, &e))?;
-            parse_pgx_toml(&text)
+            parse_pgx_toml_full(&text)
                 .map_err(|e| PgxError::usage(format!("{}: {}", f.display(), e.message)))?
         }
-        None => (None, None, None),
+        None => Parsed::default(),
     };
     Ok(ProjectConfig {
         project_id: hex16(fnv1a64(root.to_string_lossy().as_bytes())),
         root,
-        source,
-        idle_ttl,
-        grace_period,
+        source: parsed.source,
+        idle_ttl: parsed.idle_ttl,
+        grace_period: parsed.grace_period,
+        guards: parsed.guards,
         config_file: config_file.map(|f| canon(&f)),
     })
 }
 
-/// The `[agent]` table of `.pgx.toml`: `source`, `idle_ttl`, `grace_period`.
-/// A deliberately tiny TOML subset: `[section]` headers, `key = "value"` or
-/// `key = 'value'` lines, `#` comments. Unknown keys and other sections are
-/// ignored. Values are validated here so a hostile or mistaken file cannot
-/// smuggle a connection URL or an invalid name into a command.
+/// Everything `.pgx.toml`'s `[agent]` table may carry.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Parsed {
+    pub source: Option<String>,
+    pub idle_ttl: Option<String>,
+    pub grace_period: Option<String>,
+    pub guards: Guards,
+}
+
+/// The `[agent]` table of `.pgx.toml`: `source`, `idle_ttl`, `grace_period`
+/// (the guard keys are returned by [`parse_pgx_toml_full`]).
+#[cfg(test)]
 pub fn parse_pgx_toml(text: &str) -> Result<(Option<String>, Option<String>, Option<String>)> {
+    let p = parse_pgx_toml_full(text)?;
+    Ok((p.source, p.idle_ttl, p.grace_period))
+}
+
+/// The `[agent]` table of `.pgx.toml`: `source`, `idle_ttl`, `grace_period`,
+/// `connection_check_interval`, `idle_in_transaction_timeout`,
+/// `statement_timeout`. A deliberately tiny TOML subset: `[section]` headers,
+/// `key = "value"` or `key = 'value'` lines, `#` comments. Unknown keys and
+/// other sections are ignored. Values are validated here so a hostile or
+/// mistaken file cannot smuggle a connection URL or an invalid name into a
+/// command.
+pub fn parse_pgx_toml_full(text: &str) -> Result<Parsed> {
     let mut in_agent = false;
     let mut source = None;
     let mut idle_ttl = None;
     let mut grace = None;
+    let mut guards = Guards::default();
     for raw in text.lines() {
         let line = strip_comment(raw).trim();
         if line.is_empty() {
@@ -144,10 +184,38 @@ pub fn parse_pgx_toml(text: &str) -> Result<(Option<String>, Option<String>, Opt
                     grace = Some(v);
                 }
             }
+            "connection_check_interval" | "idle_in_transaction_timeout" | "statement_timeout" => {
+                // A duration, or 0/unlimited to switch the guard off.
+                if v.trim() != "0" {
+                    crate::ttl::parse_ttl(&v).map_err(|e| {
+                        PgxError::usage(format!("{CONFIG_FILE}: {k}: {}", e.message))
+                    })?;
+                }
+                match k {
+                    "connection_check_interval" => guards.connection_check_interval = Some(v),
+                    "idle_in_transaction_timeout" => guards.idle_in_transaction_timeout = Some(v),
+                    _ => guards.statement_timeout = Some(v),
+                }
+            }
             _ => {}
         }
     }
-    Ok((source, idle_ttl, grace))
+    Ok(Parsed {
+        source,
+        idle_ttl,
+        grace_period: grace,
+        guards,
+    })
+}
+
+/// A guard value as seconds for `ALTER DATABASE … SET`: `None` when the
+/// guard is off (`0`/`unlimited`).
+pub fn guard_seconds(value: Option<&str>, default: &str) -> Option<u64> {
+    let v = value.unwrap_or(default).trim();
+    if v == "0" {
+        return None;
+    }
+    crate::ttl::parse_ttl(v).ok().and_then(|t| t.as_seconds())
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -226,6 +294,34 @@ mod tests {
         assert!(parse_pgx_toml("[agent]\nsource = \"bad name\"\n").is_err());
         assert!(parse_pgx_toml("[agent]\nidle_ttl = \"soon\"\n").is_err());
         assert!(parse_pgx_toml("[agent]\nidle_ttl = \"unlimited\"\n").is_err());
+    }
+
+    #[test]
+    fn toml_guards_are_optional_validated_and_switchable_off() {
+        let p = parse_pgx_toml_full("[agent]\nsource = \"tpl\"\n").unwrap();
+        assert_eq!(p.guards, Guards::default());
+        let p = parse_pgx_toml_full(
+            "[agent]\nconnection_check_interval = \"10s\"\nidle_in_transaction_timeout = \"0\"\nstatement_timeout = \"unlimited\"\n",
+        )
+        .unwrap();
+        assert_eq!(p.guards.connection_check_interval.as_deref(), Some("10s"));
+        assert_eq!(
+            guard_seconds(
+                p.guards.connection_check_interval.as_deref(),
+                DEFAULT_CONNECTION_CHECK
+            ),
+            Some(10)
+        );
+        assert_eq!(
+            guard_seconds(p.guards.idle_in_transaction_timeout.as_deref(), "15m"),
+            None
+        );
+        assert_eq!(
+            guard_seconds(p.guards.statement_timeout.as_deref(), "1h"),
+            None
+        );
+        assert_eq!(guard_seconds(None, DEFAULT_STATEMENT_TIMEOUT), Some(3600));
+        assert!(parse_pgx_toml_full("[agent]\nstatement_timeout = \"soon\"\n").is_err());
     }
 
     #[test]

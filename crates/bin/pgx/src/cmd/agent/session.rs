@@ -55,6 +55,9 @@ impl Resolved {
 pub struct ResolveInput {
     pub id: Option<String>,
     pub host: Option<String>,
+    /// A subagent of the session (Claude Code's `agent_id`); `None` for the
+    /// session itself. Falls back to `PGX_AGENT_ID`, which routed commands carry.
+    pub agent_id: Option<String>,
     pub source: Option<String>,
     pub ttl: Option<String>,
     pub grace: Option<String>,
@@ -96,6 +99,10 @@ pub fn resolve(input: &ResolveInput) -> Result<Resolved> {
             ))
         }
     };
+    let agent_id = match input.agent_id.clone().or_else(|| env("PGX_AGENT_ID")) {
+        Some(a) => Some(identity::validate_agent_id(&a)?),
+        None => None,
+    };
     let cwd = match &input.cwd {
         Some(c) => c.clone(),
         None => std::env::current_dir()
@@ -135,6 +142,7 @@ pub fn resolve(input: &ResolveInput) -> Result<Resolved> {
             host,
             session_id,
             project_id: project.project_id.clone(),
+            agent_id,
         },
         project,
         source,
@@ -143,6 +151,74 @@ pub fn resolve(input: &ResolveInput) -> Result<Resolved> {
         idle_label,
         grace,
     })
+}
+
+/// `resolve` for a command that names a session (`--id`) but not its host:
+/// find the host from the records of this project. One match decides;
+/// several (the same id under two hosts) need `--host`; none falls back to
+/// the ordinary resolution (the surrounding host, or `exec`).
+pub fn resolve_by_id(input: &ResolveInput) -> Result<Resolved> {
+    if input.host.is_some() || input.id.is_none() {
+        return resolve(input);
+    }
+    let home = Home::resolve();
+    if !home.is_initialized() {
+        return resolve(input);
+    }
+    // The project is what `resolve` would use; the id and agent are validated there.
+    let probe = resolve(input)?;
+    let store = MetaStore::new(&home.root);
+    let (records, _) = store.list();
+    let mut hosts: Vec<String> = records
+        .iter()
+        .filter_map(|r| r.agent.as_ref())
+        .filter(|m| {
+            m.project_id == probe.key.project_id
+                && m.session_id == probe.key.session_id
+                && m.agent_id == probe.key.agent_id
+        })
+        .map(|m| m.host.clone())
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    match hosts.as_slice() {
+        [] => Ok(probe),
+        [one] => resolve(&ResolveInput {
+            host: Some(one.clone()),
+            ..input.clone()
+        }),
+        many => Err(PgxError::usage(format!(
+            "session {} has branches under several hosts ({}); pass --host",
+            probe.key.session_id,
+            many.join(", ")
+        ))),
+    }
+}
+
+/// Refuse to act when the branch a user named is not the one this session
+/// owns: a typo in `--id` can then never retire or drop somebody else's.
+pub fn verify_branch(r: &Resolved, expected: &str) -> Result<()> {
+    let home = Home::resolve();
+    let store = MetaStore::new(&home.root);
+    match find_record(&store, &r.key)? {
+        Some(rec) if rec.name == expected => Ok(()),
+        Some(rec) => Err(PgxError::new(
+            ExitCode::Conflict,
+            format!(
+                "{} owns branch {}, not {expected}; refusing to touch {expected}",
+                r.key.describe(),
+                rec.name
+            ),
+        )
+        .hint("`pgx agent ls` shows which session owns which branch")),
+        None => Err(PgxError::new(
+            ExitCode::NotFound,
+            format!(
+                "{} has no branch (so not {expected} either)",
+                r.key.describe()
+            ),
+        )),
+    }
 }
 
 /// Serialise every lifecycle operation on one session. Two hook deliveries for
@@ -156,10 +232,9 @@ pub fn lock_session(home: &Home, key: &SessionKey) -> Result<std::fs::File> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
     }
-    let material = format!("{}|{}|{}", key.project_id, key.host, key.session_id);
     let path = dir.join(format!(
         "{}.lock",
-        identity::hex16(identity::fnv1a64(material.as_bytes()))
+        identity::hex16(identity::fnv1a64(key.material().as_bytes()))
     ));
     let f = std::fs::OpenOptions::new()
         .create(true)
@@ -178,7 +253,10 @@ pub fn lock_session(home: &Home, key: &SessionKey) -> Result<std::fs::File> {
 }
 
 fn meta_matches(m: &AgentMeta, key: &SessionKey) -> bool {
-    m.host == key.host && m.session_id == key.session_id && m.project_id == key.project_id
+    m.host == key.host
+        && m.session_id == key.session_id
+        && m.project_id == key.project_id
+        && m.agent_id == key.agent_id
 }
 
 /// The record owned by this session, if any.
@@ -225,6 +303,9 @@ pub struct UpResult {
     pub elapsed_ms: f64,
     pub port: u16,
     pub password: String,
+    /// Guards that could not be set on a new branch (never fatal: the branch
+    /// works, the kill-safety is weaker; `doctor` and the JSON say so).
+    pub guard_warnings: Vec<String>,
 }
 
 fn new_meta(r: &Resolved, now: u64) -> AgentMeta {
@@ -236,7 +317,58 @@ fn new_meta(r: &Resolved, now: u64) -> AgentMeta {
         source: r.source.as_str().to_string(),
         last_touch: now,
         retired: false,
+        agent_id: r.key.agent_id.clone(),
     }
+}
+
+/// The server-side guards every agent branch carries (`ALTER DATABASE … SET`,
+/// so every new connection to the branch inherits them):
+///
+/// - `client_connection_check_interval`: a backend whose client died (a
+///   killed agent) notices within this interval even inside a long statement
+///   and aborts its transaction, instead of finishing the statement string and
+///   committing minutes later.
+/// - `idle_in_transaction_session_timeout`: an open transaction nobody drives
+///   is aborted.
+/// - `statement_timeout`: no single statement runs forever.
+///
+/// Returns the settings that could not be applied (one message each).
+pub fn apply_guards(client: &mut Client, branch: &DbName, guards: &project::Guards) -> Vec<String> {
+    let specs = [
+        (
+            "client_connection_check_interval",
+            project::guard_seconds(
+                guards.connection_check_interval.as_deref(),
+                project::DEFAULT_CONNECTION_CHECK,
+            ),
+        ),
+        (
+            "idle_in_transaction_session_timeout",
+            project::guard_seconds(
+                guards.idle_in_transaction_timeout.as_deref(),
+                project::DEFAULT_IDLE_IN_TRANSACTION,
+            ),
+        ),
+        (
+            "statement_timeout",
+            project::guard_seconds(
+                guards.statement_timeout.as_deref(),
+                project::DEFAULT_STATEMENT_TIMEOUT,
+            ),
+        ),
+    ];
+    let mut warnings = Vec::new();
+    for (name, secs) in specs {
+        let value = match secs {
+            Some(s) => format!("'{s}s'"),
+            None => "0".to_string(),
+        };
+        let sql = format!("ALTER DATABASE {} SET {name} = {value}", branch.quoted());
+        if let Err(e) = client.simple_query(&sql) {
+            warnings.push(format!("{name}: {e}"));
+        }
+    }
+    warnings
 }
 
 /// Ensure this session's branch exists and is current. Idempotent.
@@ -272,6 +404,12 @@ pub fn up(out: &Out, r: &Resolved) -> Result<UpResult> {
                 }
                 store.save(&rec)?;
                 let branch = names::validate(&rec.name)?;
+                // A recreated incarnation lost the guards with the old database.
+                let guard_warnings = if adopted {
+                    apply_guards(&mut client, &branch, &r.project.guards)
+                } else {
+                    Vec::new()
+                };
                 client.close();
                 return Ok(UpResult {
                     url: tcp_url(&ctx, branch.as_str()),
@@ -295,6 +433,7 @@ pub fn up(out: &Out, r: &Resolved) -> Result<UpResult> {
                     elapsed_ms: 0.0,
                     port: ctx.config.port,
                     password: ctx.config.password.clone(),
+                    guard_warnings,
                 });
             }
             None => {
@@ -382,6 +521,7 @@ pub fn up(out: &Out, r: &Resolved) -> Result<UpResult> {
     rec.agent = Some(new_meta(r, now));
     rec.expires_at = Some(now + idle);
     store.save(&rec)?;
+    let guard_warnings = apply_guards(&mut client, &branch, &r.project.guards);
     client.close();
     Ok(UpResult {
         url: tcp_url(&ctx, branch.as_str()),
@@ -401,6 +541,7 @@ pub fn up(out: &Out, r: &Resolved) -> Result<UpResult> {
         elapsed_ms: cloned.elapsed_ms,
         port: ctx.config.port,
         password: ctx.config.password.clone(),
+        guard_warnings,
     })
 }
 
@@ -465,43 +606,60 @@ pub struct DownResult {
     pub branch: Option<String>,
     pub dropped: bool,
     pub retired_until: Option<u64>,
+    /// Backends still connected to the branch that `down` terminated: the
+    /// cancellation barrier. After `down` returns, nothing that was running
+    /// on the branch can commit (see [`terminate_backends`]).
+    pub backends_terminated: u64,
+    /// Backends that were still alive when the barrier gave up waiting
+    /// (runtime unreachable, or a backend that ignored SIGTERM for 3 s).
+    pub backends_remaining: u64,
 }
 
 /// Session end: retire the branch (grace period) or drop it now. Only a branch
-/// whose record names this exact session is ever touched.
+/// whose record names this exact session is ever touched. Either way every
+/// backend connected to the branch is terminated first: the session is over,
+/// so a statement it left running must not commit later. A resumed session
+/// reconnects on its own.
 pub fn down(r: &Resolved, now_flag: bool) -> Result<DownResult> {
     let home = Home::resolve();
+    let none = DownResult {
+        branch: None,
+        dropped: false,
+        retired_until: None,
+        backends_terminated: 0,
+        backends_remaining: 0,
+    };
     if !home.is_initialized() {
-        return Ok(DownResult {
-            branch: None,
-            dropped: false,
-            retired_until: None,
-        });
+        return Ok(none);
     }
     let _lock = lock_session(&home, &r.key)?;
     let store = MetaStore::new(&home.root);
     let Some(mut rec) = find_record(&store, &r.key)? else {
-        return Ok(DownResult {
-            branch: None,
-            dropped: false,
-            retired_until: None,
-        });
+        return Ok(none);
     };
-    // Adopt a recreated incarnation (same derived name, new OID) so the
-    // grace period and the drop apply to what the session actually left.
+    let mut terminated = 0;
+    let mut remaining = 0;
+    let mut client = None;
     if let Ok(ctx) = Ctx::load() {
         if ctx.running_pid().is_some() {
-            if let Ok(mut client) = ctx.connect("postgres") {
-                if let Ok(Some(oid)) = database_oid(&mut client, &rec.name) {
-                    let live = rec.agent.as_ref().is_some_and(|m| !m.retired);
-                    if oid != rec.oid && live {
-                        rec.oid = oid;
-                        store.save(&rec)?;
-                    }
-                }
-                client.close();
+            if let Ok(c) = ctx.connect("postgres") {
+                client = Some((ctx, c));
             }
         }
+    }
+    if let Some((_, c)) = client.as_mut() {
+        // Adopt a recreated incarnation (same derived name, new OID) so the
+        // grace period and the drop apply to what the session actually left.
+        if let Ok(Some(oid)) = database_oid(c, &rec.name) {
+            let live = rec.agent.as_ref().is_some_and(|m| !m.retired);
+            if oid != rec.oid && live {
+                rec.oid = oid;
+                store.save(&rec)?;
+            }
+        }
+        let (t, rem) = terminate_backends(c, &rec);
+        terminated = t;
+        remaining = rem;
     }
     let now = crate::fsutil::now_epoch();
     if !now_flag {
@@ -511,22 +669,73 @@ pub fn down(r: &Resolved, now_flag: bool) -> Result<DownResult> {
             m.last_touch = now;
         }
         store.save(&rec)?;
+        if let Some((_, c)) = client.take() {
+            c.close();
+        }
         return Ok(DownResult {
             branch: Some(rec.name),
             dropped: false,
             retired_until: Some(now + r.grace_secs()),
+            backends_terminated: terminated,
+            backends_remaining: remaining,
         });
     }
-    let ctx = Ctx::load()?;
-    let mut client = ctx.connect("postgres")?;
-    drop_branch(&mut client, &rec)?;
-    client.close();
+    let (_, mut c) = match client {
+        Some(c) => c,
+        None => {
+            let ctx = Ctx::load()?;
+            let c = ctx.connect("postgres")?;
+            (ctx, c)
+        }
+    };
+    drop_branch(&mut c, &rec)?;
+    c.close();
     store.remove(&rec.name)?;
     Ok(DownResult {
         branch: Some(rec.name),
         dropped: true,
         retired_until: None,
+        backends_terminated: terminated,
+        backends_remaining: 0,
     })
+}
+
+/// The cancellation barrier: terminate every backend connected to this
+/// branch (OID-gated, so a reused name is never touched) and wait until none
+/// is left, up to 3 s. Returns `(terminated, still alive)`. PostgreSQL's
+/// `pg_terminate_backend` sends SIGTERM; a backend past the point of no
+/// return of a COMMIT (WAL flushed) still completes it, which is why the
+/// guarantee is "nothing that was running when `down` returned commits
+/// afterwards", not "nothing that was running when the client died".
+pub fn terminate_backends(client: &mut Client, rec: &TtlRecord) -> (u64, u64) {
+    match database_oid(client, &rec.name) {
+        Ok(Some(oid)) if oid == rec.oid => {}
+        _ => return (0, 0),
+    }
+    let lit = crate::pgwire::quote_literal(&rec.name);
+    let count = |client: &mut Client| -> u64 {
+        client
+            .simple_query(&format!(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = {lit} AND pid <> pg_backend_pid()"
+            ))
+            .ok()
+            .and_then(|r| r.scalar().and_then(|s| s.parse().ok()))
+            .unwrap_or(0)
+    };
+    let before = count(client);
+    if before == 0 {
+        return (0, 0);
+    }
+    let _ = client.simple_query(&format!(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = {lit} AND pid <> pg_backend_pid()"
+    ));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut left = count(client);
+    while left > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        left = count(client);
+    }
+    (before, left)
 }
 
 /// Terminate sessions on this branch only, then drop it. The OID gate keeps a
@@ -538,10 +747,7 @@ fn drop_branch(client: &mut Client, rec: &TtlRecord) -> Result<()> {
         Some(_) => {}
     }
     let name = names::validate(&rec.name)?;
-    let _ = client.simple_query(&format!(
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = {} AND pid <> pg_backend_pid()",
-        crate::pgwire::quote_literal(&rec.name)
-    ));
+    let _ = terminate_backends(client, rec);
     client
         .simple_query(&format!(
             "DROP DATABASE IF EXISTS {} WITH (FORCE)",
@@ -555,9 +761,9 @@ fn sq(v: &str) -> String {
     format!("'{}'", v.replace('\'', "'\\''"))
 }
 
-/// The nine variables a session receives.
+/// The nine variables a session receives (a subagent gets `PGX_AGENT_ID` too).
 pub fn env_pairs(res: &UpResult) -> Vec<(&'static str, String)> {
-    vec![
+    let mut v = vec![
         ("DATABASE_URL", res.url.clone()),
         ("PGX_BRANCH", res.branch.as_str().to_string()),
         ("PGX_SOURCE", res.source.clone()),
@@ -567,7 +773,11 @@ pub fn env_pairs(res: &UpResult) -> Vec<(&'static str, String)> {
         ("PGPASSWORD", res.password.clone()),
         ("PGDATABASE", res.branch.as_str().to_string()),
         ("PGX_ISOLATION", "ok".to_string()),
-    ]
+    ];
+    if let Some(a) = &res.key.agent_id {
+        v.push(("PGX_AGENT_ID", a.clone()));
+    }
+    v
 }
 
 /// `export K='v'` lines for `env_pairs`.
@@ -617,6 +827,7 @@ pub fn up_json(res: &UpResult) -> serde_json::Value {
         "socket_url": res.socket_url,
         "host": res.key.host,
         "session_id": res.key.session_id,
+        "agent_id": res.key.agent_id,
         "project_id": res.key.project_id,
         "project_root": res.project_root.to_string_lossy(),
         "idle_ttl": res.idle_ttl.label(),
@@ -625,6 +836,7 @@ pub fn up_json(res: &UpResult) -> serde_json::Value {
         "expires_in_seconds": res.expires_at.saturating_sub(res.now),
         "method": res.method,
         "elapsed_ms": (res.elapsed_ms * 10.0).round() / 10.0,
+        "guard_warnings": res.guard_warnings,
     });
     v["port"] = json!(res.port);
     v
@@ -673,12 +885,15 @@ pub fn ls(out: &Out) -> Result<ExitCode> {
         }
     }
     let mut text = format!(
-        "{:<34} {:<8} {:<14} {:<16} {:<8} {:<12} {:>9}\n",
-        "NAME", "HOST", "SESSION", "SOURCE", "STATE", "EXPIRES IN", "SIZE"
+        "{:<34} {:<8} {:<14} {:<10} {:<16} {:<8} {:<12} {:>9}\n",
+        "NAME", "HOST", "SESSION", "AGENT", "SOURCE", "STATE", "EXPIRES IN", "SIZE"
     );
     let mut items = Vec::new();
     for rec in records.iter().filter(|r| r.agent.is_some()) {
         let m = rec.agent.as_ref().unwrap();
+        // `active`: an owner is alive, the deadline is the idle TTL after its
+        // last activity. `retired`: the owner is gone, the deadline is the
+        // grace period. `expired`: past its deadline, awaiting the supervisor.
         let state = if rec.is_expired(now) {
             "expired"
         } else if m.retired {
@@ -686,13 +901,26 @@ pub fn ls(out: &Out) -> Result<ExitCode> {
         } else {
             "active"
         };
+        let deadline_kind = if m.retired { "grace" } else { "idle_ttl" };
         let sid: String = m.session_id.chars().take(12).collect();
+        let aid: String = m
+            .agent_id
+            .as_deref()
+            .map(|a| {
+                a.strip_prefix("agent-")
+                    .unwrap_or(a)
+                    .chars()
+                    .take(10)
+                    .collect()
+            })
+            .unwrap_or_else(|| "-".to_string());
         let size = sizes.get(&rec.name).copied();
         text.push_str(&format!(
-            "{:<34} {:<8} {:<14} {:<16} {:<8} {:<12} {:>9}\n",
+            "{:<34} {:<8} {:<14} {:<10} {:<16} {:<8} {:<12} {:>9}\n",
             rec.name,
             m.host,
             sid,
+            aid,
             m.source,
             state,
             crate::ttl::humanize_remaining(rec.expires_at, now),
@@ -701,6 +929,7 @@ pub fn ls(out: &Out) -> Result<ExitCode> {
         items.push(json!({
             "name": rec.name,
             "state": state,
+            "deadline_kind": deadline_kind,
             "ttl": rec.ttl_label,
             "ttl_seconds": rec.ttl_seconds,
             "expires_at": rec.expires_at.map(crate::fsutil::rfc3339),
@@ -735,12 +964,17 @@ fn human_size(b: u64) -> String {
 
 /// `pgx agent env`: the exports for an existing session, creating nothing.
 pub fn env_for_existing(r: &Resolved) -> Result<String> {
+    Ok(env_lines(&existing(r)?))
+}
+
+/// The `UpResult` an existing branch would answer with, without touching it.
+pub fn existing(r: &Resolved) -> Result<UpResult> {
     let ctx = load_ctx()?;
     let store = MetaStore::new(&ctx.home.root);
     let Some(rec) = find_record(&store, &r.key)? else {
         return Err(PgxError::new(
             ExitCode::NotFound,
-            format!("no branch for {} session {}", r.key.host, r.key.session_id),
+            format!("no branch for {}", r.key.describe()),
         )
         .hint("`pgx agent up` creates one"));
     };
@@ -767,8 +1001,9 @@ pub fn env_for_existing(r: &Resolved) -> Result<String> {
         elapsed_ms: 0.0,
         port: ctx.config.port,
         password: ctx.config.password.clone(),
+        guard_warnings: Vec::new(),
     };
-    Ok(env_lines(&res))
+    Ok(res)
 }
 
 #[allow(dead_code)]

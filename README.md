@@ -432,14 +432,15 @@ development database **schema-only** into a template (`pgx copy`), writes a
 committed `.pgx.toml`, installs lifecycle hooks (`pgx agent setup`) and
 proves a branch. From then on each Claude Code session gets its own branch
 with `DATABASE_URL` already set, extended while the agent works and removed
-after it stops; two agents never see each other's changes and your
-PostgreSQL is never written. Installing the Skill executes nothing by
-itself: the agent does the setup when the Skill is activated and your
-permissions allow it.
+after it stops, and every subagent it launches gets a branch of its own,
+with its shell commands routed there; two agents never see each other's
+changes and your PostgreSQL is never written. Installing the Skill executes
+nothing by itself: the agent does the setup when the Skill is activated and
+your permissions allow it.
 
 | Host | Automatic isolation | Status |
 |---|---|---|
-| Claude Code | yes, through hooks | verified live |
+| Claude Code | yes, through hooks: one branch per session and one per subagent | verified live |
 | Cursor | hooks installed; `pgx agent exec --` when `PGX_ISOLATION` is unset | env propagation pending live verification |
 | Codex | `pgx agent exec -- codex` (Codex hooks cannot set environment) | wrapper verified |
 

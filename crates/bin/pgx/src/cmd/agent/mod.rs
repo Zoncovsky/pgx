@@ -10,6 +10,7 @@ use crate::errors::{PgxError, Result};
 use crate::out::Out;
 use std::path::PathBuf;
 
+pub mod hosts;
 pub mod identity;
 pub mod project;
 pub mod session;

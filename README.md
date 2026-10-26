@@ -34,7 +34,7 @@ npx pgxdb@latest
 <!-- skills.sh badge: add [![skills.sh](https://skills.sh/b/pgrundev/pgx)](https://skills.sh/pgrundev/pgx) once https://skills.sh/pgrundev/pgx lists the skill -->
 
 <p align="center">
-  <sub>Open source · Free · v0.1.1 · For disposable databases, not production data</sub>
+  <sub>Open source · Free · v0.1.2 · For disposable databases, not production data</sub>
 </p>
 
 PGX is a database runtime for short-lived Postgres databases: agent
@@ -279,8 +279,8 @@ applies to memory and to storage alike.
 
 ## Status
 
-PGX is at **v0.1.1**, an early release with known limitations listed in the
-[release notes](https://github.com/pgrundev/pgx/releases/tag/v0.1.1). It
+PGX is at **v0.1.2**, an early release with known limitations listed in the
+[release notes](https://github.com/pgrundev/pgx/releases/tag/v0.1.2). It
 already powers PGX branches in PGRun. The current focus is PostgreSQL compatibility,
 Rails/application compatibility, concurrency semantics, lifecycle
 correctness, predictable resource containment and real agent workloads.
@@ -444,7 +444,7 @@ your permissions allow it.
 | Cursor | hooks installed; `pgx agent exec --` when `PGX_ISOLATION` is unset | env propagation pending live verification |
 | Codex | `pgx agent exec -- codex` (Codex hooks cannot set environment) | wrapper verified |
 
-Requires PGX 0.1.1 or newer ([release v0.1.1](https://github.com/pgrundev/pgx/releases/tag/v0.1.1)); the Skill checks the installed version before it does anything.
+Requires PGX 0.1.2 or newer ([release v0.1.2](https://github.com/pgrundev/pgx/releases/tag/v0.1.2); 0.1.1 isolates sessions but lets subagents share the parent's branch); the Skill checks the installed version before it does anything.
 Details, the lifecycle, security rules and the validation notes:
 [`docs/pgx/local-dev/agents.md`](docs/pgx/local-dev/agents.md). The Skill
 itself: [`skills/pgx/SKILL.md`](skills/pgx/SKILL.md).

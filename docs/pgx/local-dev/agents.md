@@ -36,13 +36,15 @@ the Skill is activated and the host's permissions allow it.
 
 ## Versions
 
-`pgx agent` and the Skill need **PGX 0.1.1 or newer**
-([release](https://github.com/pgrundev/pgx/releases/tag/v0.1.1): linux-amd64,
-linux-arm64, darwin-arm64 with SHA-256 checksums). The Skill's
-`scripts/check-pgx.sh` verifies the installed binary from `pgx --json version`
-and refuses older ones (the published 0.1.0 has no `pgx agent`). npm
-`pgxdb@0.1.1` follows the GitHub release through the repository's staged
-publishing process.
+`pgx agent` and the Skill need **PGX 0.1.2 or newer**
+([release](https://github.com/pgrundev/pgx/releases/tag/v0.1.2): linux-amd64,
+linux-arm64, darwin-arm64 with SHA-256 checksums). 0.1.2 is the first
+release in which Claude Code subagents get their own branches: 0.1.1
+isolated sessions but let subagents share the parent's branch, and the
+published 0.1.0 has no `pgx agent`. The Skill's `scripts/check-pgx.sh`
+verifies the installed binary from `pgx --json version` and refuses older
+ones with a hint naming what they lack. npm `pgxdb@0.1.2` follows the GitHub
+release through the repository's staged publishing process.
 
 ## What you get
 

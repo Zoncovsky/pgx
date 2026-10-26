@@ -7,8 +7,11 @@ command -v pgx && pgx --json version      # {"pgx_version":"0.1.x", …}
 pgx --json status                         # exit 3 when initialised but stopped; hooks start it on demand
 ```
 
-The skill needs **PGX 0.1.1 or newer**, the first release with the
-`pgx agent` command group (https://github.com/pgrundev/pgx/releases/tag/v0.1.1).
+The skill needs **PGX 0.1.2 or newer**
+(https://github.com/pgrundev/pgx/releases/tag/v0.1.2): the first release
+in which Claude Code subagents get their own branches (0.1.1 isolated
+sessions only and let subagents share the parent's branch; 0.1.0 has no
+`pgx agent` command group).
 `scripts/check-pgx.sh` decides: exit 0 compatible, 3 missing, 2 too old, 4
 malformed, always with one JSON line. It compares `pgx --json version` →
 `pgx_version` as semver (`PGX_MIN_VERSION` overrides the floor). Do not use

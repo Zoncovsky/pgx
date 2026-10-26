@@ -14,7 +14,7 @@ description: >
 license: AGPL-3.0
 metadata:
   author: pgrundev
-  version: "0.1.1"
+  version: "0.1.2"
   homepage: https://pgx.dev
   repository: https://github.com/pgrundev/pgx
 ---
@@ -95,7 +95,9 @@ PGX database), `none` (no database yet), `remote` (another host),
 
 ### 2. Make sure PGX is available
 
-PGX **0.1.1 or newer** is required. Run the check script next to this file:
+PGX **0.1.2 or newer** is required. 0.1.1 isolates sessions but not Claude
+Code subagents (they shared the parent's branch); 0.1.0 has no `pgx agent`
+at all. Run the check script next to this file:
 
 ```sh
 bash .claude/skills/pgx/scripts/check-pgx.sh     # or .agents/skills/pgx/scripts/check-pgx.sh,
@@ -103,8 +105,9 @@ bash .claude/skills/pgx/scripts/check-pgx.sh     # or .agents/skills/pgx/scripts
 ```
 
 It prints `{"ok":true,"version":…}` and exits 0 for a compatible binary;
-exit 3 means `pgx` is missing, 2 too old (for example the published 0.1.0,
-which has no `pgx agent`), 4 an unreadable `pgx --json version`. It reads the
+exit 3 means `pgx` is missing, 2 too old (0.1.1: session isolation only,
+subagents would share the parent's branch; 0.1.0: no `pgx agent`), 4 an
+unreadable `pgx --json version`. It reads the
 structured version only: `pgx agent --help` prints the global help on every
 version and proves nothing. If `pgx` is missing or too old,
 follow [references/installation.md](references/installation.md): prefer an

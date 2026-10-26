@@ -1,7 +1,7 @@
 {
   "name": "pgx",
   "displayName": "PGX — Postgres for Agents",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Isolated, disposable PostgreSQL-compatible databases for AI coding agents.",
   "author": {
     "name": "PGRunDev",

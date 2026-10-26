@@ -637,3 +637,35 @@ fn ls_lists_only_agent_branches() {
         .unwrap();
     assert_eq!(e["agent"]["host"], "codex", "{e}");
 }
+
+#[test]
+fn pgx_doctor_and_pgx_ls_know_about_agent_branches() {
+    let (p, proj) = up_with_source();
+    agent(
+        &p,
+        &proj,
+        &SRC,
+        &["up", "--id", "d0c70e00", "--host", "claude"],
+    );
+    // pgx doctor has an `agents` check that counts them and points at agent doctor.
+    let d = p.run(&["--json", "doctor"]).json();
+    let c = d["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "agents")
+        .unwrap_or_else(|| panic!("no agents check: {d}"));
+    assert_eq!(c["status"], "ok", "{c}");
+    assert!(
+        c["detail"].as_str().unwrap().contains("1 agent branch"),
+        "{c}"
+    );
+    // pgx ls shows the owning host next to the TTL.
+    let ls = p.run(&["ls"]);
+    let line = ls
+        .stdout
+        .lines()
+        .find(|l| l.starts_with("agent-claude-d0c70e00"))
+        .unwrap_or_else(|| panic!("{}", ls.all()));
+    assert!(line.contains("2h (claude)"), "{line}");
+}

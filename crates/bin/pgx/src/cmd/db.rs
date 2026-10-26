@@ -433,8 +433,13 @@ pub fn ls(out: &Out) -> Result<ExitCode> {
             }
         };
         let expires_in = crate::ttl::humanize_remaining(expires_at, now);
+        // An agent branch names its host next to the TTL: `2h (claude)`.
+        let ttl_col = match rec.and_then(|r| r.agent.as_ref()) {
+            Some(m) => format!("{ttl_label} ({})", m.host),
+            None => ttl_label.clone(),
+        };
         text.push_str(&format!(
-            "{name:<24} {status:<10} {ttl_label:<10} {expires_in:<12} {:>12}\n",
+            "{name:<24} {status:<10} {ttl_col:<10} {expires_in:<12} {:>12}\n",
             human_size(size),
         ));
         items.push(json!({

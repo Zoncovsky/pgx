@@ -816,3 +816,55 @@ fn pgx_drop_forgets_the_agent_record_and_a_retired_session_never_adopts() {
     );
     assert!(db_exists(&p, &b2), "the foreign database survives");
 }
+
+#[test]
+fn sessions_sharing_a_name_prefix_get_distinct_branches() {
+    // Two sessions whose ids share the first 8 characters collide on the short
+    // name; the second takes the long name instead of failing with exit 4.
+    let (p, proj) = up_with_source();
+    let a = agent(
+        &p,
+        &proj,
+        &SRC,
+        &["up", "--id", "abcdefgh-1111", "--host", "claude"],
+    )
+    .json();
+    let b = agent(
+        &p,
+        &proj,
+        &SRC,
+        &["up", "--id", "abcdefgh-2222", "--host", "claude"],
+    );
+    assert_eq!(b.code, 0, "{}", b.all());
+    let b = b.json();
+    assert_eq!(a["branch"], "agent-claude-abcdefgh", "{a}");
+    assert!(
+        b["branch"]
+            .as_str()
+            .unwrap()
+            .starts_with("agent-claude-abcdefgh-"),
+        "{b}"
+    );
+    assert_ne!(a["branch"], b["branch"]);
+    // Each session keeps finding its own branch afterwards.
+    assert_eq!(
+        agent(
+            &p,
+            &proj,
+            &SRC,
+            &["up", "--id", "abcdefgh-1111", "--host", "claude"]
+        )
+        .json()["branch"],
+        a["branch"]
+    );
+    assert_eq!(
+        agent(
+            &p,
+            &proj,
+            &SRC,
+            &["up", "--id", "abcdefgh-2222", "--host", "claude"]
+        )
+        .json()["branch"],
+        b["branch"]
+    );
+}

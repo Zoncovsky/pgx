@@ -168,8 +168,20 @@ fn write_doc(path: &Path, doc: &Value) -> Result<()> {
     std::fs::rename(&tmp, path).map_err(|e| PgxError::io("cannot rename into place", path, &e))
 }
 
-fn is_ours(entry: &Value) -> bool {
-    entry.to_string().contains(MARKER)
+/// Ours: the `command` of a Cursor entry, or any `hooks[].command` of a
+/// Claude/Codex group, runs `pgx agent hook`. Messages or comments that merely
+/// mention the marker do not count.
+pub fn is_our_command(cmd: &Value) -> bool {
+    cmd.as_str().is_some_and(|c| c.contains(MARKER))
+}
+
+pub fn is_ours(entry: &Value) -> bool {
+    if is_our_command(&entry["command"]) {
+        return true;
+    }
+    entry["hooks"]
+        .as_array()
+        .is_some_and(|hs| hs.iter().any(|h| is_our_command(&h["command"])))
 }
 
 /// Add our entries where missing. Returns (added, already present).
@@ -205,7 +217,10 @@ fn merge_install(doc: &mut Value, host: Host) -> (usize, usize) {
     (added, present)
 }
 
-/// Remove our entries everywhere in `hooks`; drop event arrays left empty.
+/// Remove our hooks everywhere in `hooks`: a Cursor entry whose command is
+/// ours, or our `hooks[]` items inside a Claude/Codex group (a foreign hook
+/// sharing the group stays). Groups and event arrays left empty are dropped.
+/// Returns the number of hook commands removed.
 fn merge_uninstall(doc: &mut Value) -> usize {
     let mut removed = 0;
     let Some(hooks) = doc.get_mut("hooks").and_then(|h| h.as_object_mut()) else {
@@ -213,13 +228,27 @@ fn merge_uninstall(doc: &mut Value) -> usize {
     };
     let mut empty = Vec::new();
     for (event, list) in hooks.iter_mut() {
-        if let Some(arr) = list.as_array_mut() {
-            let before = arr.len();
-            arr.retain(|e| !is_ours(e));
-            removed += before - arr.len();
-            if arr.is_empty() {
-                empty.push(event.clone());
+        let Some(arr) = list.as_array_mut() else {
+            continue;
+        };
+        for entry in arr.iter_mut() {
+            if let Some(inner) = entry.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+                let before = inner.len();
+                inner.retain(|h| !is_our_command(&h["command"]));
+                removed += before - inner.len();
             }
+        }
+        let cursor_ours = arr.iter().filter(|e| is_our_command(&e["command"])).count();
+        removed += cursor_ours;
+        arr.retain(|e| {
+            let emptied = e
+                .get("hooks")
+                .and_then(|h| h.as_array())
+                .is_some_and(|h| h.is_empty());
+            !(is_our_command(&e["command"]) || emptied)
+        });
+        if arr.is_empty() {
+            empty.push(event.clone());
         }
     }
     for e in empty {

@@ -359,7 +359,22 @@ pub fn up(out: &Out, r: &Resolved) -> Result<UpResult> {
         short
     };
 
-    let cloned = db::clone_database(&ctx, &mut client, &r.source, &branch, Some(&r.idle_label))?;
+    let (branch, cloned) =
+        match db::clone_database(&ctx, &mut client, &r.source, &branch, Some(&r.idle_label)) {
+            Ok(c) => (branch, c),
+            Err(e) if e.code == ExitCode::Conflict => {
+                // Another session took this name between the check and the
+                // clone (42P04): fall back to the long, project-qualified name.
+                let long = names::validate(&identity::branch_name(&r.key, true))?;
+                if long == branch {
+                    return Err(e);
+                }
+                let c =
+                    db::clone_database(&ctx, &mut client, &r.source, &long, Some(&r.idle_label))?;
+                (long, c)
+            }
+            Err(e) => return Err(e),
+        };
     // Attach the session to the record `clone_database` wrote.
     let mut rec = store
         .load(branch.as_str())?
@@ -419,7 +434,10 @@ pub fn touch(r: &Resolved) -> Result<Touched> {
     };
     let now = crate::fsutil::now_epoch();
     let last = rec.agent.as_ref().map(|m| m.last_touch).unwrap_or(0);
-    if now.saturating_sub(last) < TOUCH_INTERVAL_SECS {
+    let idle = rec.ttl_seconds.unwrap_or(r.idle_secs());
+    // Rate-limit writes, but never so much that a short TTL cannot be kept alive.
+    let min_gap = TOUCH_INTERVAL_SECS.min(idle / 4).max(1);
+    if now.saturating_sub(last) < min_gap {
         return Ok(Touched {
             branch: Some(rec.name),
             skipped: true,

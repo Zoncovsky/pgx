@@ -79,10 +79,12 @@ check go "d['framework']=='go' and d['database_config']['classification']=='loca
 check empty "d['framework']=='unknown' and d['database_config']['classification']=='none'"
 check sensitive "d['database_config']['classification']=='sensitive'"
 check empty "d['pgx']['installed']==False"
+check remote-ssl "d['database_config']['classification']=='sensitive'"
+grep -q 'scripts/detect-project.sh' "$skill/SKILL.md" && grep -qE '\.claude/skills/pgx/scripts/detect-project\.sh|\.agents/skills/pgx/scripts/detect-project\.sh' "$skill/SKILL.md" && ok "SKILL.md names the installed script paths" || bad "SKILL.md must name the installed script paths"
 # Secrets never leak into the output.
-for f in django prisma node sensitive; do
+for f in django prisma node sensitive remote-ssl; do
   out=$(j $f)
-  case "$out" in *localsecret*|*pw@*|*hunter2*|*topsecret*) bad "detect $f leaks a secret: $out" ;; *) ok "detect $f: no secret in output" ;; esac
+  case "$out" in *localsecret*|*pw@*|*hunter2*|*topsecret*|*s3cret*) bad "detect $f leaks a secret: $out" ;; *) ok "detect $f: no secret in output" ;; esac
 done
 # The output is one JSON object per run, nothing else on stdout.
 j rails | python3 -I -c 'import json,sys; json.load(sys.stdin)' && ok "detect output is a single JSON document" || bad "detect output is not clean JSON"

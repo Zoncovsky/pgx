@@ -28,7 +28,7 @@ esac
 [ $migrations = unknown ] && [ $framework = rails ] && migrations=rails
 
 # --- database configuration --------------------------------------------------
-files=""; url_sources=""; host=""; port=""; db=""; url_seen=0
+files=""; url_sources=""; host=""; port=""; db=""; url_seen=0; ssl=0
 add_file() { files="$files\"$(esc "$1")\","; }
 add_src() { url_sources="$url_sources\"$(esc "$1")\","; }
 # Split a URL into host/port/db without ever echoing userinfo.
@@ -38,6 +38,7 @@ parse_url() {
   hp=${rest%%/*}; rest=${rest#*/}
   host=${hp%%:*}; [ "$host" = "$hp" ] && port="" || port=${hp#*:}
   db=${rest%%\?*}
+  case "$rest" in *sslmode=require*|*sslmode=verify-ca*|*sslmode=verify-full*) ssl=1 ;; esac
   url_seen=1
 }
 if [ -n "${DATABASE_URL:-}" ]; then add_src env:DATABASE_URL; parse_url "$DATABASE_URL"; fi
@@ -71,6 +72,7 @@ if [ -n "$host$db" ] || [ -n "$files" ]; then
   if [ -z "$host$db" ] && [ -z "$url_sources" ]; then classification=none
   elif printf '%s' "$host" | grep -qiE '(^|[.-])prod|production|rds\.amazonaws|neon\.tech|supabase|render\.com|railway|herokuapp|amazonaws|azure|googleapis|fly\.dev|timescale|aiven|crunchy|cloud'; then classification=sensitive
   elif [ -z "$host" ] || printf '%s' "$host" | grep -qE '^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0|/|host\.docker\.internal)$'; then classification=local
+  elif [ "$ssl" = 1 ]; then classification=sensitive   # TLS-only remote databases are rarely throwaway
   else classification=remote
   fi
 fi

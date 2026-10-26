@@ -76,8 +76,12 @@ in one line each; do not paste raw terminal output unless something failed.
 ### 1. Detect the project
 
 ```sh
-bash scripts/detect-project.sh .      # from this skill's directory; prints one JSON object
+bash .claude/skills/pgx/scripts/detect-project.sh .     # Claude Code install location
+bash .agents/skills/pgx/scripts/detect-project.sh .     # Codex and Cursor install location
 ```
+
+(The script sits next to this file under `scripts/`; pass the project
+directory as its argument. It prints one JSON object.)
 
 Read `framework`, `migrations`, `database_config.classification` and `pgx`.
 Classifications: `local` (a PostgreSQL on this machine), `pgx` (already a

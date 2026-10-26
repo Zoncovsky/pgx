@@ -583,3 +583,92 @@ fn setup_refuses_a_committed_source_that_does_not_exist() {
         "no hooks installed on failure"
     );
 }
+
+#[test]
+fn uninstall_matches_commands_only_and_keeps_mixed_groups() {
+    // A foreign entry that merely mentions "pgx agent hook" in a message must
+    // survive; a group holding a foreign hook and ours keeps the foreign one.
+    let l = lab(true);
+    std::fs::create_dir_all(l.proj.join(".claude")).unwrap();
+    std::fs::write(
+        l.proj.join(".claude/settings.json"),
+        json!({"hooks": {
+            "SessionStart": [{"hooks": [{"type": "command", "command": "orca-hook", "statusMessage": "runs before pgx agent hook"}]}],
+            "SessionEnd": [{"hooks": [{"type": "command", "command": "orca-end"}]}]
+        }}).to_string(),
+    ).unwrap();
+    l.run(&l.proj, &[], &["install", "claude"]);
+    // Merge our hook into the foreign SessionEnd group by hand (what a user might do).
+    let path = l.proj.join(".claude/settings.json");
+    let mut s: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let ours = s["hooks"]["SessionEnd"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e.to_string().contains(MARKER))
+        .unwrap()["hooks"][0]
+        .clone();
+    s["hooks"]["SessionEnd"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|e| !e.to_string().contains(MARKER));
+    s["hooks"]["SessionEnd"][0]["hooks"]
+        .as_array_mut()
+        .unwrap()
+        .push(ours);
+    std::fs::write(&path, s.to_string()).unwrap();
+    let j = l.run(&l.proj, &[], &["uninstall", "claude"]).json();
+    assert_eq!(j["hosts"][0]["removed"], 4, "{j}");
+    let s = l.read(".claude/settings.json");
+    assert_eq!(
+        s["hooks"]["SessionStart"].as_array().unwrap().len(),
+        1,
+        "{s}"
+    );
+    assert_eq!(
+        s["hooks"]["SessionStart"][0]["hooks"][0]["command"], "orca-hook",
+        "foreign entry mentioning the marker survives: {s}"
+    );
+    assert_eq!(
+        s["hooks"]["SessionEnd"][0]["hooks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{s}"
+    );
+    assert_eq!(
+        s["hooks"]["SessionEnd"][0]["hooks"][0]["command"], "orca-end",
+        "{s}"
+    );
+    assert!(!s.to_string().contains("exec pgx agent hook"), "{s}");
+}
+
+#[test]
+fn install_keeps_the_users_key_order_and_doctor_prefers_pgx_source() {
+    let l = lab(true);
+    std::fs::create_dir_all(l.proj.join(".claude")).unwrap();
+    std::fs::write(l.proj.join(".claude/settings.json"), "{\n  \"permissions\": {\"allow\": [\"Bash(ls:*)\"]},\n  \"env\": {\"ZED\": \"1\", \"ALPHA\": \"2\"},\n  \"hooks\": {}\n}\n").unwrap();
+    l.run(&l.proj, &[], &["install", "claude", "--source", "myapp"]);
+    let text = std::fs::read_to_string(l.proj.join(".claude/settings.json")).unwrap();
+    let perm = text.find("\"permissions\"").unwrap();
+    let env = text.find("\"env\"").unwrap();
+    let zed = text.find("\"ZED\"").unwrap();
+    let alpha = text.find("\"ALPHA\"").unwrap();
+    assert!(perm < env && zed < alpha, "key order preserved: {text}");
+    // doctor resolves the source like the hook does: PGX_SOURCE beats .pgx.toml.
+    assert_eq!(l.p.run(&["create", "other"]).code, 0);
+    let j = l
+        .run(&l.proj, &[("PGX_SOURCE", "other")], &["doctor"])
+        .json();
+    let src = j["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "source")
+        .unwrap();
+    assert!(
+        src["detail"].as_str().unwrap().starts_with("other"),
+        "{src}"
+    );
+}

@@ -1,7 +1,7 @@
 //! `pgx agent doctor`: is this project ready for automatic isolation, and is
 //! the current session actually using its branch?
 use super::hosts::Host;
-use super::install::{self, MARKER};
+use super::install;
 use super::project;
 use super::session;
 use super::Scope;
@@ -58,7 +58,7 @@ fn count_ours(path: &Path) -> Option<(usize, usize, bool)> {
         for (_, list) in hooks {
             let n = list
                 .as_array()
-                .map(|a| a.iter().filter(|e| e.to_string().contains(MARKER)).count())
+                .map(|a| a.iter().filter(|e| install::is_ours(e)).count())
                 .unwrap_or(0);
             if n > 0 {
                 covered += 1;
@@ -228,11 +228,11 @@ pub fn run(out: &Out, cwd: &Path) -> Result<ExitCode> {
     }
 
     // Source.
-    let source_name = project
-        .as_ref()
+    // The same precedence the hook uses: PGX_SOURCE, then .pgx.toml, then app.
+    let source_name = std::env::var("PGX_SOURCE")
         .ok()
-        .and_then(|p| p.source.clone())
-        .or_else(|| std::env::var("PGX_SOURCE").ok().filter(|s| !s.is_empty()))
+        .filter(|s| !s.is_empty())
+        .or_else(|| project.as_ref().ok().and_then(|p| p.source.clone()))
         .unwrap_or_else(|| project::DEFAULT_SOURCE.to_string());
     if let (Some(c), Some(_)) = (&ctx, running) {
         match c.connect("postgres") {

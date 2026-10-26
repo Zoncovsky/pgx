@@ -101,7 +101,15 @@ pub fn run(out: &Out, opts: ExecOpts) -> Result<ExitCode> {
     };
 
     // Wait, forwarding signals and keeping the idle TTL alive.
-    let heartbeat = Duration::from_secs((r.idle_secs() / 4).clamp(30, r.idle_secs().max(31) - 1));
+    // Beat well inside the TTL: a quarter of it (at least 30 s) for normal
+    // TTLs, half of it for very short ones, so the supervisor never removes
+    // the branch under a running command.
+    let idle = r.idle_secs();
+    let heartbeat = Duration::from_secs(if idle >= 120 {
+        (idle / 4).max(30)
+    } else {
+        (idle / 2).max(1)
+    });
     let mut last_beat = Instant::now();
     let mut forwarded = 0;
     let status = loop {

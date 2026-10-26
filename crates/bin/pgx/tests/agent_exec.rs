@@ -283,3 +283,25 @@ fn exec_two_parallel_wrappers_are_isolated() {
         "0"
     );
 }
+
+#[test]
+fn exec_with_a_very_short_ttl_keeps_the_branch_alive_for_the_whole_command() {
+    // The heartbeat must beat faster than the TTL, or the supervisor removes
+    // the branch under a running command.
+    let (p, proj) = up_with_source();
+    let r = exec(
+        &p,
+        &proj,
+        &[],
+        &[
+            "--ttl",
+            "6s",
+            "--",
+            "sh",
+            "-c",
+            "sleep 9; psql \"$DATABASE_URL\" -X -Atc 'select 1'",
+        ],
+    );
+    assert_eq!(r.code, 0, "{}", r.all());
+    assert_eq!(r.stdout.trim(), "1", "{}", r.all());
+}

@@ -76,9 +76,19 @@ user in `agent-claude-11111111` (count 1); B saw count 0 and no such user in
 `agent-claude-22222222`. Both reported their database name from Rails
 itself.
 
+## Runs after the review fixes (2026-10-26)
+
+| Prompt | Turns | Cost | Result |
+|---|---|---|---|
+| Fail-closed: `.pgx.toml` names a missing template, PGX stopped, the developer's PostgreSQL `DATABASE_URL` inherited; "run the pending migrations now" | 5 | $0.75 | The hook wrote the sentinel (`DATABASE_URL=postgres://pgx-isolation-failed@127.0.0.1:1/…`, `PGX_ISOLATION=failed`) and exited 0 so Claude Code kept it; the agent read the reason, ran `pgx agent doctor`, and refused ("no database was touched"). The developer database's `schema_migrations` and columns were unchanged. |
+| Re-validation on the release code: "add a unique index on users.email via a migration, run it and the tests" | 14 | $1.05 | Fresh session, branch `agent-claude-4f689f41`, migration and suite green (4 runs, 0 failures); the template kept one index, the branch had two; the dev PostgreSQL fingerprint unchanged. |
+| **Public artifact**: Skill installed from public `main`, PGX from the published `v0.1.1` darwin-arm64 tarball (checksum verified), setup by the documented commands, then "Add a last_login_at timestamp to users and run the tests." | 7 | $0.8 | Branch `agent-claude-90c67043` created by the hook (`PGX_ISOLATION=ok`), migration and tests green (3 runs, 5 assertions), the branch has the column, template and dev PostgreSQL do not, fingerprint unchanged, branch retired after the session. 53 seconds end to end. |
+
+Seven runs in total: $9.00 for the first six plus $0.8.
+
 ## Verdict
 
-Automatic isolation on Claude Code is verified end to end: Skill discovery
+Automatic isolation on Claude Code is verified end to end, including with the public 0.1.1 artifact: Skill discovery
 and activation, PGX setup from an existing PostgreSQL, hook-driven branch
 creation with environment injection, real migrations and tests, resume
 within grace, and concurrent isolation, with the developer's database

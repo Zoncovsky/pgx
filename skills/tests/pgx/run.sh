@@ -90,4 +90,9 @@ done
 # The output is one JSON object per run, nothing else on stdout.
 j rails | python3 -I -c 'import json,sys; json.load(sys.stdin)' && ok "detect output is a single JSON document" || bad "detect output is not clean JSON"
 
+# 4. The version-check script.
+[ -x "$skill/scripts/check-pgx.sh" ] && ok "scripts/check-pgx.sh executable" || bad "scripts/check-pgx.sh missing or not executable"
+"$here/check-pgx.test.sh" >/tmp/check-pgx.out 2>&1 && ok "check-pgx.sh: missing/old/current/malformed" || bad "check-pgx.sh tests: $(tail -3 /tmp/check-pgx.out)"
+grep -q 'check-pgx.sh' "$skill/SKILL.md" && ok "SKILL.md points at check-pgx.sh" || bad "SKILL.md must use check-pgx.sh"
+
 [ "$fail" -eq 0 ] && echo "ALL SKILL TESTS PASSED" || { echo "SKILL TESTS FAILED"; exit 1; }

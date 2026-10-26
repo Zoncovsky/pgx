@@ -8,12 +8,15 @@ pgx --json status                         # exit 3 when initialised but stopped;
 ```
 
 The skill needs **PGX 0.1.1 or newer**, the first release with the
-`pgx agent` command group. Check `pgx --json version` → `pgx_version`
-(compare as semver: 0.1.1 ≤ 0.1.1 < 0.2.0), or run `pgx agent ls`, which
-exits 2 with "unknown command" on an older binary. Do not use `pgx agent
---help` as the test: `--help` prints the global help on every version. An
-older binary: upgrade with the method it was installed with (`npm i -g
-pgxdb@latest`, or the installer again) and re-check the version.
+`pgx agent` command group (https://github.com/pgrundev/pgx/releases/tag/v0.1.1).
+`scripts/check-pgx.sh` decides: exit 0 compatible, 3 missing, 2 too old, 4
+malformed, always with one JSON line. It compares `pgx --json version` →
+`pgx_version` as semver (`PGX_MIN_VERSION` overrides the floor). Do not use
+`pgx agent --help` as the test: `--help` prints the global help on every
+version. An older binary: upgrade with the method it was installed with
+(`npm i -g pgxdb@latest`, or the installer again) and run the check again;
+if the upgrade still reports 0.1.0, the newer package is not yet on that
+channel and the user should install from the GitHub release.
 
 ## Install, in order of preference
 

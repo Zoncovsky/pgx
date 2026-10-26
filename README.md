@@ -420,6 +420,7 @@ permissions allow it.
 | Cursor | hooks installed; `pgx agent exec --` when `PGX_ISOLATION` is unset | env propagation pending live verification |
 | Codex | `pgx agent exec -- codex` (Codex hooks cannot set environment) | wrapper verified |
 
+Requires PGX 0.1.1 or newer ([release v0.1.1](https://github.com/pgrundev/pgx/releases/tag/v0.1.1)); the Skill checks the installed version before it does anything.
 Details, the lifecycle, security rules and the validation notes:
 [`docs/pgx/local-dev/agents.md`](docs/pgx/local-dev/agents.md). The Skill
 itself: [`skills/pgx/SKILL.md`](skills/pgx/SKILL.md).

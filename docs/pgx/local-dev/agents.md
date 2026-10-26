@@ -21,6 +21,16 @@ session on, isolation is automatic on the hosts marked verified below. A
 Skill installation on its own executes nothing; the agent performs setup when
 the Skill is activated and the host's permissions allow it.
 
+## Versions
+
+`pgx agent` and the Skill need **PGX 0.1.1 or newer**
+([release](https://github.com/pgrundev/pgx/releases/tag/v0.1.1): linux-amd64,
+linux-arm64, darwin-arm64 with SHA-256 checksums). The Skill's
+`scripts/check-pgx.sh` verifies the installed binary from `pgx --json version`
+and refuses older ones (the published 0.1.0 has no `pgx agent`). npm
+`pgxdb@0.1.1` follows the GitHub release through the repository's staged
+publishing process.
+
 ## What you get
 
 | | |

@@ -17,18 +17,42 @@ pub fn hex16(v: u64) -> String {
     format!("{v:016x}")
 }
 
-/// The identity of one coding-agent session.
+/// The identity of one coding-agent session, or of one subagent inside it.
+///
+/// A host session is `(project, host, session id)`. A subagent that the host
+/// identifies (Claude Code's `agent_id` in `SubagentStart`, `SubagentStop`
+/// and the tool hooks it fires) adds that id: every subagent of a session is
+/// its own key and therefore its own branch, and the parent keeps the key it
+/// always had, so records written before subagents existed still match.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionKey {
     pub host: String,
     pub session_id: String,
     pub project_id: String,
+    /// `None` for the host session itself (the parent agent).
+    pub agent_id: Option<String>,
 }
 
 impl SessionKey {
-    /// The bytes every derived hash is computed over.
-    fn material(&self) -> String {
-        format!("{}|{}|{}", self.project_id, self.host, self.session_id)
+    /// The bytes every derived hash is computed over. A parent's material is
+    /// exactly what it was before subagents existed (lock files and long
+    /// names stay stable across upgrades).
+    pub fn material(&self) -> String {
+        match &self.agent_id {
+            None => format!("{}|{}|{}", self.project_id, self.host, self.session_id),
+            Some(a) => format!(
+                "{}|{}|{}|agent:{}",
+                self.project_id, self.host, self.session_id, a
+            ),
+        }
+    }
+
+    /// `claude session 9b1f…` or `claude session 9b1f… agent abc1…`, for messages.
+    pub fn describe(&self) -> String {
+        match &self.agent_id {
+            None => format!("{} session {}", self.host, self.session_id),
+            Some(a) => format!("{} session {} agent {}", self.host, self.session_id, a),
+        }
     }
 }
 
@@ -54,6 +78,16 @@ pub fn validate_host(s: &str) -> Result<String> {
 /// no `/`, no shell metacharacters. It is used as a lookup key and never reaches
 /// SQL unquoted, but a tight alphabet keeps hostile payloads boring.
 pub fn validate_session_id(s: &str) -> Result<String> {
+    validate_id(s, "session id")
+}
+
+/// A subagent id as the host hands it over (Claude Code: `agent_id`, e.g.
+/// `agent-abc123` or a hex string). Same alphabet and limits as a session id.
+pub fn validate_agent_id(s: &str) -> Result<String> {
+    validate_id(s, "agent id")
+}
+
+fn validate_id(s: &str, what: &str) -> Result<String> {
     let ok = !s.is_empty()
         && s.len() <= 128
         && s.bytes().all(|b| {
@@ -64,39 +98,56 @@ pub fn validate_session_id(s: &str) -> Result<String> {
         Ok(s.to_string())
     } else {
         Err(PgxError::usage(format!(
-            "invalid session id {s:?}: use up to 128 characters from A-Z a-z 0-9 - _ . : @ + ="
+            "invalid {what} {s:?}: use up to 128 characters from A-Z a-z 0-9 - _ . : @ + ="
         )))
     }
 }
 
-/// `agent-<host>-<sid8>`; with `long`, `agent-<host>-<sid8>-<16 hex of the full key>`.
-/// `sid8` is the first 8 characters of the session id, lowercased, when all of
-/// them are `[a-z0-9]` (UUIDs qualify); otherwise the first 8 hex digits of
-/// the key's FNV hash.
-pub fn branch_name(key: &SessionKey, long: bool) -> String {
-    let lowered = key.session_id.to_ascii_lowercase();
+/// Eight readable characters of an id: its first 8, lowercased, when all of
+/// them are `[a-z0-9]` (UUIDs and hex ids qualify); otherwise the first 8 hex
+/// digits of the id's own FNV hash. A leading `agent-`, as Claude Code
+/// prefixes its subagent ids, is skipped so the visible part is the unique
+/// part.
+fn readable8(id: &str) -> String {
+    let id = id
+        .strip_prefix("agent-")
+        .filter(|r| !r.is_empty())
+        .unwrap_or(id);
+    let lowered = id.to_ascii_lowercase();
     let first8: String = lowered.chars().take(8).collect();
-    let sid8 = if first8.len() == 8
+    if first8.len() == 8
         && first8
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
     {
         first8
     } else {
-        // Hash the id alone: the short name stays project-independent and the
-        // long name carries the project, exactly like the readable case.
-        hex16(fnv1a64(key.session_id.as_bytes()))[..8].to_string()
-    };
-    if long {
-        format!(
-            "agent-{}-{}-{}",
-            key.host,
-            sid8,
-            hex16(fnv1a64(key.material().as_bytes()))
-        )
-    } else {
-        format!("agent-{}-{}", key.host, sid8)
+        hex16(fnv1a64(id.as_bytes()))[..8].to_string()
     }
+}
+
+/// The branch name for a key.
+///
+/// - parent: `agent-<host>-<sid8>`; long form `agent-<host>-<sid8>-<16 hex of the full key>`
+/// - subagent: `agent-<host>-<sid8>-<aid8>`; long form adds the 16 hex digits too
+///
+/// `sid8`/`aid8` are [`readable8`] of the session and agent id. The short
+/// name is what a human sees in `pgx ls`; the long name carries a hash of the
+/// complete identity (project, host, session, agent) and is used whenever
+/// the short name is taken by something else, so uniqueness never rests on
+/// the eight visible characters alone. Longest possible name: 6 + 16 + 1 +
+/// 8 + 1 + 8 + 1 + 16 = 57 bytes, inside PostgreSQL's 63-byte limit.
+pub fn branch_name(key: &SessionKey, long: bool) -> String {
+    let mut name = format!("agent-{}-{}", key.host, readable8(&key.session_id));
+    if let Some(a) = &key.agent_id {
+        name.push('-');
+        name.push_str(&readable8(a));
+    }
+    if long {
+        name.push('-');
+        name.push_str(&hex16(fnv1a64(key.material().as_bytes())));
+    }
+    name
 }
 
 /// The environment variable a host sets in the commands it runs, carrying its
@@ -118,7 +169,71 @@ mod tests {
             host: host.to_string(),
             session_id: sid.to_string(),
             project_id: "a1b2c3d4e5f60718".to_string(),
+            agent_id: None,
         }
+    }
+
+    fn subkey(host: &str, sid: &str, aid: &str) -> SessionKey {
+        let mut k = key(host, sid);
+        k.agent_id = Some(aid.to_string());
+        k
+    }
+
+    #[test]
+    fn subagents_get_their_own_names_and_parents_keep_theirs() {
+        let sid = "f775e29e-e738-4f37-93b4-9b82f539ba81";
+        let parent = key("claude", sid);
+        assert_eq!(branch_name(&parent, false), "agent-claude-f775e29e");
+        // Claude's `agent-` prefix is skipped: the visible part is the unique part.
+        let a = subkey("claude", sid, "agent-ada61284");
+        let b = subkey("claude", sid, "agent-a9f6af68");
+        assert_eq!(branch_name(&a, false), "agent-claude-f775e29e-ada61284");
+        assert_eq!(branch_name(&b, false), "agent-claude-f775e29e-a9f6af68");
+        assert_ne!(branch_name(&a, true), branch_name(&b, true));
+        assert_ne!(a.material(), parent.material());
+        // Hex ids as the harness hands them over work too.
+        let c = subkey("claude", sid, "ada612848f911988e");
+        assert_eq!(branch_name(&c, false), "agent-claude-f775e29e-ada61284");
+        assert!(crate::names::validate(&branch_name(&c, true)).is_ok());
+        assert!(branch_name(&c, true).len() <= 63);
+        // The parent's material is byte-identical to the pre-subagent format.
+        assert_eq!(
+            parent.material(),
+            "a1b2c3d4e5f60718|claude|".to_string() + sid
+        );
+        assert!(a.describe().contains("agent agent-ada61284"));
+        assert!(!parent.describe().contains("agent agent-"));
+    }
+
+    #[test]
+    fn two_subagents_sharing_eight_characters_differ_in_the_long_name() {
+        let sid = "f775e29e-e738-4f37-93b4-9b82f539ba81";
+        let a = subkey("claude", sid, "agent-deadbeef01");
+        let b = subkey("claude", sid, "agent-deadbeef02");
+        assert_eq!(branch_name(&a, false), branch_name(&b, false));
+        assert_ne!(branch_name(&a, true), branch_name(&b, true));
+    }
+
+    #[test]
+    fn longest_name_fits_postgres() {
+        let k = SessionKey {
+            host: "x".repeat(16),
+            session_id: "s".repeat(128),
+            project_id: "f".repeat(16),
+            agent_id: Some("a".repeat(128)),
+        };
+        let n = branch_name(&k, true);
+        assert!(n.len() <= 63, "{n} is {} bytes", n.len());
+        assert!(crate::names::validate(&n).is_ok(), "{n}");
+    }
+
+    #[test]
+    fn agent_ids_are_validated_like_session_ids() {
+        assert_eq!(validate_agent_id("agent-abc123").unwrap(), "agent-abc123");
+        assert!(validate_agent_id("").is_err());
+        assert!(validate_agent_id("a b").is_err());
+        assert!(validate_agent_id("../x").is_err());
+        assert!(validate_agent_id("x; rm -rf /").is_err());
     }
 
     #[test]

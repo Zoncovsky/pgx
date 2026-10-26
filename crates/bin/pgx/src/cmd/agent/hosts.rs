@@ -43,6 +43,13 @@ pub enum Event {
     Start,
     /// The agent did something: extend the idle TTL.
     Activity,
+    /// A tool is about to run (Claude Code `PreToolUse`): activity, and for a
+    /// subagent's Bash command the point where it is routed to its branch.
+    ToolUse,
+    /// A subagent of the session started: ensure its own branch.
+    SubagentStart,
+    /// A subagent finished: retire its branch.
+    SubagentStop,
     /// The session ended: retire the branch.
     End,
     /// Delivered to us but not ours to act on.
@@ -54,6 +61,15 @@ pub struct HookInput {
     pub host: Host,
     pub event: Event,
     pub session_id: String,
+    /// The subagent this delivery is about or comes from (Claude Code's
+    /// `agent_id`); `None` for the session itself.
+    pub agent_id: Option<String>,
+    /// An `agent_id` was present but not acceptable: the reason. The hook
+    /// treats such a delivery as a subagent it cannot identify.
+    pub agent_id_error: Option<String>,
+    /// `PreToolUse`: the tool and its input.
+    pub tool_name: Option<String>,
+    pub tool_input: Option<serde_json::Value>,
     /// Where the session runs (payload `cwd`, or Cursor's first workspace root).
     pub cwd: Option<PathBuf>,
     /// The host's project root from its environment, when it differs from `cwd`.
@@ -115,7 +131,17 @@ pub fn detect(
         }
     };
     let event = match host {
-        Host::Claude | Host::Codex => match raw_event.as_str() {
+        Host::Claude => match raw_event.as_str() {
+            "SessionStart" => Event::Start,
+            "UserPromptSubmit" | "PostToolUse" => Event::Activity,
+            "PreToolUse" => Event::ToolUse,
+            "SubagentStart" => Event::SubagentStart,
+            "SubagentStop" => Event::SubagentStop,
+            "SessionEnd" => Event::End,
+            _ => Event::Ignore,
+        },
+        // Codex has no subagent events and its PreToolUse is activity only.
+        Host::Codex => match raw_event.as_str() {
             "SessionStart" => Event::Start,
             "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => Event::Activity,
             "SessionEnd" => Event::End,
@@ -158,10 +184,27 @@ pub fn detect(
     }
     .filter(|v| !v.is_empty())
     .map(PathBuf::from);
+    // A subagent id, when the host sends one. Only Claude Code does today; it
+    // is validated like a session id, and a bad one is remembered rather than
+    // rejected so the hook can still answer the delivery safely.
+    let (agent_id, agent_id_error) = match str_field(payload, "agent_id").filter(|a| !a.is_empty())
+    {
+        Some(a) if host == Host::Claude => match identity::validate_agent_id(&a) {
+            Ok(a) => (Some(a), None),
+            Err(e) => (None, Some(e.message)),
+        },
+        _ => (None, None),
+    };
+    let tool_name = str_field(payload, "tool_name");
+    let tool_input = payload.get("tool_input").filter(|t| t.is_object()).cloned();
     Ok(HookInput {
         host,
         event,
         session_id,
+        agent_id,
+        agent_id_error,
+        tool_name,
+        tool_input,
         cwd,
         project_dir,
         reason: str_field(payload, "reason"),
@@ -253,13 +296,56 @@ mod tests {
             Some(std::path::Path::new("/work/app"))
         );
         assert!(!h.background);
-        for ev in ["UserPromptSubmit", "PreToolUse", "PostToolUse"] {
+        assert!(h.agent_id.is_none() && h.agent_id_error.is_none());
+        for ev in ["UserPromptSubmit", "PostToolUse"] {
             assert_eq!(
                 detect(&claude(ev, json!({})), &e, None).unwrap().event,
                 Event::Activity,
                 "{ev}"
             );
         }
+        let t = detect(
+            &claude(
+                "PreToolUse",
+                json!({"tool_name": "Bash", "tool_input": {"command": "psql -c 'select 1'", "timeout": 5000}}),
+            ),
+            &e,
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.event, Event::ToolUse);
+        assert_eq!(t.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(t.tool_input.unwrap()["command"], "psql -c 'select 1'");
+        // Subagent deliveries carry the agent id; a bad one is remembered, not fatal.
+        let s = detect(
+            &claude(
+                "SubagentStart",
+                json!({"agent_id": "agent-abc123", "agent_type": "Explore"}),
+            ),
+            &e,
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.event, Event::SubagentStart);
+        assert_eq!(s.agent_id.as_deref(), Some("agent-abc123"));
+        let s = detect(
+            &claude("SubagentStop", json!({"agent_id": "agent-abc123"})),
+            &e,
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.event, Event::SubagentStop);
+        let bad = detect(
+            &claude(
+                "PreToolUse",
+                json!({"agent_id": "x; rm -rf /", "tool_name": "Bash"}),
+            ),
+            &e,
+            None,
+        )
+        .unwrap();
+        assert!(bad.agent_id.is_none());
+        assert!(bad.agent_id_error.is_some());
         let end = detect(
             &claude("SessionEnd", json!({"reason": "prompt_input_exit"})),
             &e,

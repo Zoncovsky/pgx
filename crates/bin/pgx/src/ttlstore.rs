@@ -52,6 +52,8 @@ pub struct AgentMeta {
     pub last_touch: u64,
     /// Set by `down` without `--now`: the session ended and the grace period runs.
     pub retired: bool,
+    /// The host's id for a subagent of the session; `None` for the session itself.
+    pub agent_id: Option<String>,
 }
 
 impl AgentMeta {
@@ -59,6 +61,7 @@ impl AgentMeta {
         json!({
             "host": self.host,
             "session_id": self.session_id,
+            "agent_id": self.agent_id,
             "project_id": self.project_id,
             "project_root": self.project_root,
             "source": self.source,
@@ -80,6 +83,8 @@ impl AgentMeta {
             source: s("source")?,
             last_touch: v.get("last_touch").and_then(|x| x.as_u64()).unwrap_or(0),
             retired: v.get("retired").and_then(|x| x.as_bool()).unwrap_or(false),
+            // Absent in records written before subagents existed: the session itself.
+            agent_id: s("agent_id").filter(|a| !a.is_empty()),
         })
     }
 }
@@ -418,8 +423,17 @@ mod tests {
             source: "myapp".into(),
             last_touch: 1_000_000,
             retired: false,
+            agent_id: None,
         });
         assert_eq!(TtlRecord::from_json(&r.to_json()).unwrap(), r);
+        // A subagent record round-trips its agent id; a pre-subagent record
+        // (no `agent_id` key at all) reads back as the session itself.
+        let mut sub = r.clone();
+        sub.agent.as_mut().unwrap().agent_id = Some("agent-abc123".into());
+        assert_eq!(TtlRecord::from_json(&sub.to_json()).unwrap(), sub);
+        let legacy = r.to_json().replace("\"agent_id\": null,\n", "");
+        assert!(!legacy.contains("agent_id"), "{legacy}");
+        assert_eq!(TtlRecord::from_json(&legacy).unwrap(), r);
         assert!(TtlRecord::from_json(&rec("x", Some(1)).to_json())
             .unwrap()
             .agent

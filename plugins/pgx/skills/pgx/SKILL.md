@@ -147,6 +147,24 @@ hosts: `DATABASE_URL`, `PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`/`PGDATABASE`,
 `PGX_BRANCH` and `PGX_ISOLATION=ok` are in the shell before your first
 command, and a context line tells you the branch name.
 
+**Subagents (Claude Code)** each get their own branch, automatically: the
+`SubagentStart` hook clones one for the subagent, and the `PreToolUse` hook
+runs every Bash command the subagent issues through `pgx agent exec --agent
+<its id> -- <shell> -c '<the command>'`, which puts that branch's
+`DATABASE_URL`/`PG*` in the command's environment (the command text is
+rewritten; what it does is unchanged). A subagent therefore never shares the
+parent's database, needs no id, no `pgx agent exec` of its own, and must
+not set `DATABASE_URL`/`PG*` itself. When you are a subagent, the context
+line says which branch is yours; when you launch subagents, do not pass them
+database names or connection details. If a subagent's branch cannot be
+ensured, its Bash commands are refused with the reason (`PGX: …`) instead
+of running against the parent's database: report that to the user, do not
+work around it. The rewritten command still goes through Claude Code's
+permission flow; if the user wants no prompts (or runs in auto mode, whose
+classifier may refuse wrapped commands), they can allow the wrapper with a
+rule such as `Bash(/path/to/pgx agent exec:*)`, where `/path/to/pgx` is the absolute path the rewritten command starts with (for the installer, `~/.local/bin/pgx` written out; `pgx agent doctor` shows it). Never add
+such a rule yourself.
+
 **The session that ran setup** (and any session where `PGX_ISOLATION` is
 unset) has no branch yet. Run database work through the wrapper:
 
@@ -156,10 +174,17 @@ pgx agent exec -- bin/rails test
 ```
 
 Inside Claude Code and Codex the wrapper attaches to the current session's
-branch (same branch every call, kept alive). Elsewhere each `exec` is its own
-branch that is dropped when the command exits (`--keep` to retire with a
-grace period instead). `eval "$(pgx agent env)"` exports the variables into
-a shell you control.
+branch (same branch every call, kept alive; inside a routed subagent
+command, to the subagent's). Elsewhere each `exec` is its own branch that is
+dropped when the command exits; `--keep` leaves it active for the idle TTL,
+and the next `exec` with the same `--id` attaches to it with its data. `eval
+"$(pgx agent env)"` exports the variables into a shell you control. Explicit
+ids (`--id`, `--agent`) are the manual fallback for hosts without subagent
+hooks; never use them for ordinary Claude Code work.
+
+Prefer `psql` (and other libpq clients) without a URL argument: the `PG*`
+variables carry the connection, so the password never appears in a process
+argument list.
 
 Framework commands, all read `DATABASE_URL` (or `PG*`) from the environment:
 
@@ -190,9 +215,15 @@ template. More: [references/database-branching.md](references/database-branching
   `PGX_ISOLATION_REASON`, run `pgx agent doctor`, fix, and ask the user to
   start a new session. Do not work around it.
 - Branches clean themselves up: the idle TTL (default 2h after the last
-  activity) and a 10-minute grace after the session ends. Nothing to do.
-  `pgx agent ls` lists them; `pgx agent down --now` drops the current one
-  when the user wants it gone immediately.
+  activity) and a 10-minute grace after the session or subagent ends, during
+  which whatever it left connected is terminated so nothing commits late.
+  Nothing to do. `pgx agent ls` lists them (session and subagent branches
+  alike); `pgx agent down --now` drops the current session's own branch when
+  the user wants it gone immediately, and only that one: name the branch
+  (`--branch <name>`) when dropping anything by `--id`, so a typo cannot hit
+  another branch.
+- `~/.pgx/agent/hooks.log` records every hook delivery (event, ids, outcome;
+  no values), so "did the subagent get its branch?" has an answer.
 - The template is never modified by branching. To refresh it from the
   PostgreSQL source, run `pgx copy` again into a new name and update
   `.pgx.toml` (ask first).
@@ -201,7 +232,7 @@ template. More: [references/database-branching.md](references/database-branching
 
 | Host | After `pgx agent setup` | Notes |
 |---|---|---|
-| Claude Code | Automatic. SessionStart creates the branch and exports the variables for every Bash command; activity extends the TTL; SessionEnd starts the grace period. Verified live. | Subagents share the session's branch. `claude --worktree` sessions get their own. [references/claude-code.md](references/claude-code.md) |
+| Claude Code | Automatic. SessionStart creates the branch and exports the variables for every Bash command; activity extends the TTL; SessionEnd starts the grace period. SubagentStart gives each subagent its own branch, PreToolUse routes the subagent's Bash commands to it, SubagentStop retires it. Verified live. | Projects set up before these hooks existed show `partial installation` in `pgx agent doctor`: run `pgx agent install claude`. `claude --worktree` sessions get their own branch. [references/claude-code.md](references/claude-code.md) |
 | Cursor | Hooks installed (`.cursor/hooks.json`). The sessionStart hook returns the variables for the agent's shell; Cursor applies them to that conversation. | Env is not re-applied when a stopped chat is reopened, and not inherited by Cursor subagents: if `PGX_ISOLATION` is unset, use `pgx agent exec --`. Cloud agents are out of scope. [references/cursor.md](references/cursor.md) |
 | Codex | Lifecycle hooks only (Codex hooks cannot set environment). Start Codex as `pgx agent exec -- codex`, or run database commands as `pgx agent exec -- <command>` inside Codex (it attaches to the session). | The `workspace-write` sandbox blocks loopback TCP; the project needs `sandbox_workspace_write.network_access = true`. Say so; never change sandbox settings silently. [references/codex.md](references/codex.md) |
 

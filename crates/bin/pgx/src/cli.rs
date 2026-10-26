@@ -393,10 +393,13 @@ Agents (one isolated database per coding-agent session)
                           one-time project setup: writes .pgx.toml, installs lifecycle
                           hooks for the detected hosts, verifies them
   pgx agent doctor        check hooks, .pgx.toml, the source template, the runtime
-  pgx agent exec [--source <db>] [--ttl <dur>] [--keep] -- <command> [args…]
+  pgx agent exec [--id <session>] [--agent <id>] [--source <db>] [--ttl <dur>] [--keep] -- <command> [args…]
                           run any command (codex, tests, a script) with its own branch
-                          in DATABASE_URL; retire the branch when it exits
-  pgx agent ls            agent branches: host, session, source, expires-in
+                          in DATABASE_URL; drop the branch when it exits, or with
+                          --keep leave it active for its idle TTL (the next exec with
+                          the same --id attaches to it). Inside a Claude Code or Codex
+                          session it attaches to that session's branch instead.
+  pgx agent ls            agent branches: host, session, agent, source, expires-in
   pgx agent up|touch|down|env|hook|install|uninstall
                           lifecycle primitives (see docs/pgx/local-dev/agents.md)
 

@@ -38,10 +38,16 @@ pub fn hook_command(host: Host) -> String {
 /// The events each host gets, with their timeouts (seconds).
 fn events(host: Host) -> Vec<(&'static str, Option<&'static str>, u64)> {
     match host {
+        // PreToolUse(Bash) extends the session's TTL and routes a subagent's
+        // command to its own branch (ensuring it first, so a clone may be
+        // needed: hence the longer timeout). SubagentStart/Stop give each
+        // subagent its branch and retire it.
         Host::Claude => vec![
             ("SessionStart", None, 30),
             ("UserPromptSubmit", None, 5),
-            ("PreToolUse", Some("Bash"), 5),
+            ("PreToolUse", Some("Bash"), 15),
+            ("SubagentStart", None, 30),
+            ("SubagentStop", None, 10),
             ("SessionEnd", None, 10),
         ],
         // Touch hooks sit on non-permission events so they can never influence approvals.
@@ -675,14 +681,29 @@ mod tests {
     #[test]
     fn merge_is_idempotent_and_keeps_foreign_entries() {
         let mut doc = json!({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "other"}]}]}});
-        assert_eq!(merge_install(&mut doc, Host::Claude), (4, 0));
-        assert_eq!(merge_install(&mut doc, Host::Claude), (0, 4));
+        assert_eq!(merge_install(&mut doc, Host::Claude), (6, 0));
+        assert_eq!(merge_install(&mut doc, Host::Claude), (0, 6));
         assert_eq!(doc["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
         assert_eq!(
             doc["hooks"]["SessionStart"][0]["hooks"][0]["command"],
             "other"
         );
-        assert_eq!(merge_uninstall(&mut doc), 4);
+        assert!(doc["hooks"]["SubagentStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains(MARKER));
+        assert_eq!(doc["hooks"]["SubagentStop"][0]["hooks"][0]["timeout"], 10);
+        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "Bash");
+        // An older installation (four events) is completed, not duplicated.
+        let mut old = json!({"hooks": {}});
+        merge_install(&mut old, Host::Claude);
+        old["hooks"]
+            .as_object_mut()
+            .unwrap()
+            .remove("SubagentStart");
+        old["hooks"].as_object_mut().unwrap().remove("SubagentStop");
+        assert_eq!(merge_install(&mut old, Host::Claude), (2, 4));
+        assert_eq!(merge_uninstall(&mut doc), 6);
         assert_eq!(doc["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
         assert!(doc["hooks"].get("SessionEnd").is_none());
     }

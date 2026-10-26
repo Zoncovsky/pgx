@@ -73,7 +73,8 @@ fn count_ours(path: &Path) -> Option<(usize, usize, bool)> {
 
 fn expected_events(host: Host) -> usize {
     match host {
-        Host::Claude | Host::Cursor => 4,
+        Host::Claude => 6,
+        Host::Cursor => 4,
         Host::Codex => 3,
     }
 }
@@ -136,7 +137,11 @@ fn hooks_check(host: Host, root: &Path) -> Check {
         return warn(
             name,
             format!("partial installation in {p}"),
-            "run `pgx agent install` to complete it",
+            if host == Host::Claude {
+                "run `pgx agent install claude` to complete it (installations before 0.1.2 lack the SubagentStart/SubagentStop hooks that give subagents their own branches)"
+            } else {
+                "run `pgx agent install` to complete it"
+            },
         );
     }
     warn(
@@ -376,15 +381,45 @@ pub fn run(out: &Out, cwd: &Path) -> Result<ExitCode> {
         .filter(|r| r.agent.as_ref().unwrap().retired)
         .count();
     let expired = agents.iter().filter(|r| r.is_expired(now)).count();
+    let subagents = agents
+        .iter()
+        .filter(|r| r.agent.as_ref().unwrap().agent_id.is_some())
+        .count();
     checks.push(ok(
         "branches",
         format!(
-            "{} agent branch(es): {} retired, {} expired awaiting cleanup",
+            "{} agent branch(es) ({} for subagents): {} retired, {} expired awaiting cleanup",
             agents.len(),
+            subagents,
             retired,
             expired
         ),
     ));
+    // The hook audit log: the last subagent events, so "did the hooks fire?"
+    // has an answer without a debugger.
+    let log = super::hook::audit_log_path(&home);
+    if let Ok(text) = std::fs::read_to_string(&log) {
+        let sub: Vec<&str> = text
+            .lines()
+            .filter(|l| {
+                l.contains(" Subagent") || l.contains("-> routed") || l.contains("-> denied")
+            })
+            .collect();
+        let denied = sub.iter().filter(|l| l.contains("-> denied")).count();
+        if let Some(last) = sub.last() {
+            let detail = format!(
+                "{} subagent event(s) logged, {} denied; last: {}",
+                sub.len(),
+                denied,
+                last.split_once(' ').map(|(_, rest)| rest).unwrap_or(last)
+            );
+            checks.push(if denied > 0 {
+                warn("subagents", detail, format!("see {}", log.display()))
+            } else {
+                ok("subagents", detail)
+            });
+        }
+    }
 
     let any_fail = checks.iter().any(|c| c.status == "fail");
     let mut text = String::new();

@@ -104,7 +104,7 @@ fn install_merges_and_preserves_foreign_hooks() {
             .ends_with(".claude/settings.json"),
         "{j}"
     );
-    assert_eq!(h["added"], 4, "{j}");
+    assert_eq!(h["added"], 6, "{j}");
     assert_eq!(h["present"], 0, "{j}");
     let s = l.read(".claude/settings.json");
     assert_eq!(s["env"]["FOO"], "1");
@@ -129,7 +129,14 @@ fn install_merges_and_preserves_foreign_hooks() {
         .find(|e| e.to_string().contains(MARKER))
         .unwrap();
     assert_eq!(mine["matcher"], "Bash", "{mine}");
-    assert_eq!(mine["hooks"][0]["timeout"], 5, "{mine}");
+    assert_eq!(mine["hooks"][0]["timeout"], 15, "{mine}");
+    for ev in ["SubagentStart", "SubagentStop"] {
+        assert_eq!(ours(&s["hooks"][ev]), 1, "{ev}");
+        assert!(
+            s["hooks"][ev][0].get("matcher").is_none(),
+            "{ev} matches every agent type"
+        );
+    }
     let start = s["hooks"]["SessionStart"]
         .as_array()
         .unwrap()
@@ -145,7 +152,7 @@ fn install_merges_and_preserves_foreign_hooks() {
     // Idempotent.
     let j2 = l.run(&l.proj, &[], &["install", "claude"]).json();
     assert_eq!(j2["hosts"][0]["added"], 0, "{j2}");
-    assert_eq!(j2["hosts"][0]["present"], 4, "{j2}");
+    assert_eq!(j2["hosts"][0]["present"], 6, "{j2}");
     assert_eq!(
         ours(&l.read(".claude/settings.json")["hooks"]["SessionStart"]),
         1
@@ -295,7 +302,7 @@ fn uninstall_removes_only_ours() {
     let j = l
         .run(&l.proj, &[], &["uninstall", "claude", "cursor"])
         .json();
-    assert_eq!(j["hosts"][0]["removed"], 4, "{j}");
+    assert_eq!(j["hosts"][0]["removed"], 6, "{j}");
     assert_eq!(j["hosts"][1]["removed"], 4, "{j}");
     let s = l.read(".claude/settings.json");
     assert_eq!(s["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
@@ -618,7 +625,7 @@ fn uninstall_matches_commands_only_and_keeps_mixed_groups() {
         .push(ours);
     std::fs::write(&path, s.to_string()).unwrap();
     let j = l.run(&l.proj, &[], &["uninstall", "claude"]).json();
-    assert_eq!(j["hosts"][0]["removed"], 4, "{j}");
+    assert_eq!(j["hosts"][0]["removed"], 6, "{j}");
     let s = l.read(".claude/settings.json");
     assert_eq!(
         s["hooks"]["SessionStart"].as_array().unwrap().len(),

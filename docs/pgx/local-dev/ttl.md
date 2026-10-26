@@ -14,6 +14,16 @@ pgx ttl agent-001                  # show the current TTL
 pgx ls                             # NAME, STATUS, TTL, EXPIRES IN, SIZE
 ```
 
+## Idle TTL for agent branches
+
+Branches made by `pgx agent` (the Skill, the hooks, `pgx agent exec`) use the
+TTL as an **idle** timeout: every prompt and shell command the agent runs
+moves the deadline to now + TTL (default `2h`, `idle_ttl` in `.pgx.toml`), so
+a three-hour session stays alive while a forgotten one still disappears. When
+the session ends the branch is *retired*: its deadline becomes now + the
+grace period (default `10m`, `grace_period`), long enough for a resume to find
+its data. `pgx agent ls` shows `active`, `retired` and `expired` states.
+
 ## Durations
 
 `30s`, `5m`, `15m`, `1h`, `6h`, `24h`, `7d` — any positive whole number with a

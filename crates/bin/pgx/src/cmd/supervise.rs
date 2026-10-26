@@ -139,11 +139,27 @@ fn expire_one(
     // Gate 3: the database must still exist with the recorded OID. Gone → finalize.
     // Different OID → the name was reused by a new database; drop the stale record,
     // never the replacement.
+    let mut rec = rec.clone();
     match crate::cmd::db::database_oid(client, &rec.name)? {
         None => return store.remove(&rec.name),
-        Some(oid) if oid != rec.oid => return store.remove(&rec.name),
+        Some(oid) if oid != rec.oid => {
+            // An agent branch lives in a name space only its session uses; a
+            // new incarnation under that name was recreated by the session
+            // (a framework purge) and is still its disposable branch. Any
+            // other database keeps the rule: a reused name is never touched.
+            // Only a live session can have recreated it; a retired session
+            // is gone, so a same-name newcomer is foreign and the stale
+            // record is simply forgotten.
+            if rec.agent.as_ref().is_some_and(|m| !m.retired) {
+                rec.oid = oid;
+                store.save(&rec)?;
+            } else {
+                return store.remove(&rec.name);
+            }
+        }
         Some(_) => {}
     }
+    let rec = &rec;
     // Gate 4: re-read the live record and the clock immediately before dropping.
     // A concurrent `pgx ttl … unlimited` (record removed) or extension (deadline
     // moved) cancels the deletion.

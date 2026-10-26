@@ -51,13 +51,23 @@ psql "$(pgx url myapp --socket)"   # Unix socket, no password
 
 ## Agent workflow
 
-An agent creates a disposable database per task, works against it, and drops it:
+With the PGX Skill installed (`npx skills add pgrundev/pgx --skill pgx`) and
+`pgx agent setup` run once in the project, each Claude Code session gets its
+own branch and `DATABASE_URL` automatically; Cursor and Codex are covered by
+hooks plus `pgx agent exec`. See [agents.md](agents.md).
+
+By hand, any command can run in a branch of its own:
+
+```sh
+pgx agent exec -- bin/rails test          # its own branch, dropped when the command exits
+pgx agent exec --keep -- python manage.py migrate   # kept for 10 minutes afterwards
+```
+
+or, the older pattern, one disposable database per task:
 
 ```sh
 db="task_$(date +%s)"
-pgx create "$db"
+pgx branch app "$db" --ttl 2h
 DATABASE_URL="$(pgx --json url "$db" | jq -r .url)"  # run migrations / tests
 pgx drop "$db" --force
 ```
-
-The `pgrun-branching` skill automates this lifecycle.

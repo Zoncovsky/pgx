@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod copy;
 pub mod db;
 pub mod doctor;

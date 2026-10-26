@@ -1,0 +1,10 @@
+/log/*
+!/log/.keep
+/tmp/*
+!/tmp/.keep
+/storage/*
+!/storage/.keep
+/db/*.sqlite3*
+.byebug_history
+/config/master.key
+/config/credentials/*.key

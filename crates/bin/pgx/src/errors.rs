@@ -8,7 +8,8 @@ pub struct PgxError {
     pub hint: Option<String>,
     /// Structured cause for `--json` consumers (for example the unsupported
     /// extensions that stopped a copy). Absent from human output.
-    pub details: Option<serde_json::Value>,
+    /// Boxed: JSON values are large and every `Result` carries this type.
+    pub details: Option<Box<serde_json::Value>>,
 }
 
 impl PgxError {
@@ -21,7 +22,7 @@ impl PgxError {
         }
     }
     pub fn details(mut self, details: serde_json::Value) -> Self {
-        self.details = Some(details);
+        self.details = Some(Box::new(details));
         self
     }
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
@@ -45,7 +46,7 @@ impl PgxError {
             "hint": self.hint,
         });
         if let Some(d) = &self.details {
-            err["details"] = d.clone();
+            err["details"] = (**d).clone();
         }
         serde_json::json!({ "error": err }).to_string()
     }

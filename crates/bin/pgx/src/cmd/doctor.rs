@@ -414,6 +414,24 @@ pub fn run(out: &Out) -> Result<ExitCode> {
     // TTL management.
     if initialized {
         checks.extend(ttl_checks(&home, running_pid.is_some()));
+        // Agent branches (pgx agent): counted here, diagnosed by `pgx agent doctor`.
+        {
+            let (records, _) = crate::ttlstore::MetaStore::new(&home.root).list();
+            let now = crate::fsutil::now_epoch();
+            let agents: Vec<_> = records.iter().filter(|r| r.agent.is_some()).collect();
+            let retired = agents
+                .iter()
+                .filter(|r| r.agent.as_ref().unwrap().retired)
+                .count();
+            let expired = agents.iter().filter(|r| r.is_expired(now)).count();
+            checks.push(ok(
+                "agents",
+                format!(
+                    "{} agent branch(es): {retired} retired, {expired} expired awaiting cleanup (`pgx agent doctor` checks a project)",
+                    agents.len()
+                ),
+            ));
+        }
     }
 
     // Host resources.

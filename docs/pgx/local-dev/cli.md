@@ -57,6 +57,25 @@ DATABASE_URL:
 postgres://postgres:…@127.0.0.1:5433/agent-1
 ```
 
+## Agents: one isolated database per coding-agent session
+
+The `pgx agent` group is what the [PGX Skill](../../../skills/pgx/SKILL.md)
+and the host hooks call; it is also a complete manual interface. Details and
+the per-host compatibility matrix are in [agents.md](agents.md).
+
+| Command | What it does |
+|---|---|
+| `pgx agent setup [--source <db>] [--hosts claude,cursor,codex] [--scope project\|local\|user] [--ttl <dur>] [--no-hooks]` | One-time project setup: initialise and start PGX if needed, make sure the source template exists and is idle, write `.pgx.toml`, install lifecycle hooks for the detected hosts, create and remove one real branch as proof, and self-test that the hook can find `pgx`. Idempotent. |
+| `pgx agent doctor` | Check `.pgx.toml`, the runtime and supervisor, the source (exists, idle), each host's hook files (missing, partial, duplicated), the current session's branch and whether `DATABASE_URL` names it, and the agent branches overall. Exit 1 on any failure. |
+| `pgx agent exec [--source <db>] [--ttl <dur>] [--keep] [--id <s>] [--host <h>] -- <command> [args…]` | Run any command with its own branch in `DATABASE_URL` (and `PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`/`PGDATABASE`, `PGX_BRANCH`, `PGX_SOURCE`, `PGX_AGENT_SESSION`). Forwards SIGINT/SIGTERM/SIGHUP, keeps the idle TTL alive, exits with the command's status (128+signal if killed), then drops the branch (`--keep`: retire with the grace period). Inside a Claude Code or Codex session it attaches to that session's branch instead and leaves it alone. |
+| `pgx agent ls` | Agent branches: name, host, session, source, state (active, retired, expired), expires-in, size. |
+| `pgx agent up [--id <s>] [--host <h>] [--source <db>] [--ttl <dur>] [--env]` | Ensure this session's branch: create it (a clone of the source with the idle TTL) or extend the existing one. `--env` prints `export` lines. Session id and host default to the surrounding agent's variables (`CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`). Refuses a busy source (exit 6) and a missing named source (exit 5); the default source `app` is created empty when absent. |
+| `pgx agent touch [--id <s>] [--host <h>]` | Activity: move the deadline to now + idle TTL (at most once per 30 s; no connection). |
+| `pgx agent down [--id <s>] [--host <h>] [--now \| --grace <dur>]` | Session end: retire the branch (grace period, default 10m) so a resume finds it, or `--now` drop it. Only a branch recorded for that exact session is ever touched. |
+| `pgx agent env [--id <s>] [--host <h>]` | The `export` lines for an existing session's branch; `eval "$(pgx agent env)"`. |
+| `pgx agent hook [--host claude\|cursor\|codex]` | The command the hosts' hook files run: reads the host payload on stdin, detects the host, and answers in its dialect (Claude: `CLAUDE_ENV_FILE` exports plus a context line; Cursor: `{"env":…,"additional_context":…}`; Codex: `additionalContext`). Never exits 2. Fails closed with an unreachable sentinel `DATABASE_URL` when the project has `.pgx.toml` and no branch could be made. |
+| `pgx agent install [claude] [cursor] [codex] [--scope …] [--source <db>]` / `uninstall` | Merge our entries into (or remove them from) `.claude/settings.json`, `.cursor/hooks.json`, `.codex/hooks.json` (or the `--scope local`/`user` files), leaving every other entry untouched. |
+
 ## Import from PostgreSQL
 
 | Command | What it does |

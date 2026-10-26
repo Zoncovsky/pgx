@@ -36,6 +36,54 @@ impl State {
     }
 }
 
+/// Who owns an agent branch: the coding-agent session it was created for.
+/// `pgx agent` reads and writes it; the TTL supervisor ignores it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentMeta {
+    /// `claude`, `cursor`, `codex`, or a free label for `pgx agent exec`.
+    pub host: String,
+    pub session_id: String,
+    /// Hash of the project root, so identical session ids in two projects stay apart.
+    pub project_id: String,
+    pub project_root: String,
+    /// The database the branch was cloned from.
+    pub source: String,
+    /// Last activity (epoch seconds); `touch` moves `expires_at` from here.
+    pub last_touch: u64,
+    /// Set by `down` without `--now`: the session ended and the grace period runs.
+    pub retired: bool,
+}
+
+impl AgentMeta {
+    pub fn to_json(&self) -> serde_json::Value {
+        json!({
+            "host": self.host,
+            "session_id": self.session_id,
+            "project_id": self.project_id,
+            "project_root": self.project_root,
+            "source": self.source,
+            "last_touch": self.last_touch,
+            "retired": self.retired,
+        })
+    }
+
+    /// A missing or malformed object is `None`, never an error: the TTL record
+    /// stays readable and its safety gates keep working.
+    fn from_json(v: Option<&serde_json::Value>) -> Option<AgentMeta> {
+        let v = v?;
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
+        Some(AgentMeta {
+            host: s("host")?,
+            session_id: s("session_id")?,
+            project_id: s("project_id")?,
+            project_root: s("project_root").unwrap_or_default(),
+            source: s("source")?,
+            last_touch: v.get("last_touch").and_then(|x| x.as_u64()).unwrap_or(0),
+            retired: v.get("retired").and_then(|x| x.as_bool()).unwrap_or(false),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TtlRecord {
     pub name: String,
@@ -53,6 +101,8 @@ pub struct TtlRecord {
     pub state: State,
     pub last_attempt: Option<u64>,
     pub last_error: Option<String>,
+    /// Present only on branches created by `pgx agent`.
+    pub agent: Option<AgentMeta>,
 }
 
 impl TtlRecord {
@@ -73,6 +123,7 @@ impl TtlRecord {
             "state": self.state.as_str(),
             "last_attempt": self.last_attempt,
             "last_error": self.last_error,
+            "agent": self.agent.as_ref().map(AgentMeta::to_json),
         });
         serde_json::to_string_pretty(&v).expect("ttl record serialises")
     }
@@ -114,6 +165,7 @@ impl TtlRecord {
             .get("last_error")
             .and_then(|x| x.as_str())
             .map(String::from);
+        let agent = AgentMeta::from_json(v.get("agent"));
         Ok(TtlRecord {
             name,
             oid,
@@ -125,6 +177,7 @@ impl TtlRecord {
             state,
             last_attempt,
             last_error,
+            agent,
         })
     }
 }
@@ -251,6 +304,7 @@ mod tests {
             state: State::Active,
             last_attempt: None,
             last_error: None,
+            agent: None,
         }
     }
 
@@ -351,5 +405,30 @@ mod tests {
         assert!(rec("x", Some(100)).is_expired(101));
         assert!(!rec("x", Some(100)).is_expired(99));
         assert!(!rec("x", None).is_expired(u64::MAX)); // unlimited never expires
+    }
+
+    #[test]
+    fn agent_metadata_round_trips_and_is_optional() {
+        let mut r = rec("agent-claude-9b1f3c2d", Some(1_007_200));
+        r.agent = Some(AgentMeta {
+            host: "claude".into(),
+            session_id: "9b1f3c2d-0000".into(),
+            project_id: "a1b2c3d4e5f60718".into(),
+            project_root: "/p".into(),
+            source: "myapp".into(),
+            last_touch: 1_000_000,
+            retired: false,
+        });
+        assert_eq!(TtlRecord::from_json(&r.to_json()).unwrap(), r);
+        assert!(TtlRecord::from_json(&rec("x", Some(1)).to_json())
+            .unwrap()
+            .agent
+            .is_none());
+        // A malformed agent object is ignored, never an error: the record stays
+        // readable and the TTL safety gates keep working.
+        let text = rec("y", Some(1))
+            .to_json()
+            .replace("\"schema\": 1", "\"agent\": 42, \"schema\": 1");
+        assert!(TtlRecord::from_json(&text).unwrap().agent.is_none());
     }
 }

@@ -833,3 +833,104 @@ fn help_and_doctor_mention_copy() {
     assert!(h.stdout.contains("pgx copy --from"), "{}", h.stdout);
     assert!(h.stdout.contains("--schema-only"));
 }
+
+#[test]
+fn b2_schema_only_keeps_migration_bookkeeping_rows() {
+    // A schema-only template must still know which migrations ran, or the
+    // framework re-runs them on the first branch and fails on existing tables
+    // (Rails then purges the database). Bookkeeping tables keep their rows.
+    let src = common::PgSource::start();
+    src.create_db("bk");
+    let q = src.psql(
+        "bk",
+        "CREATE TABLE users(id serial PRIMARY KEY, email text); INSERT INTO users(email) VALUES ('a'),('b');
+         CREATE TABLE schema_migrations(version varchar PRIMARY KEY); INSERT INTO schema_migrations VALUES ('20260101000001'),('20260102000002');
+         CREATE TABLE ar_internal_metadata(key varchar PRIMARY KEY, value varchar, created_at timestamp, updated_at timestamp);
+         INSERT INTO ar_internal_metadata VALUES ('environment','development',now(),now()),('schema_sha1','abc',now(),now());
+         CREATE TABLE django_migrations(id serial PRIMARY KEY, app text, name text, applied timestamptz); INSERT INTO django_migrations(app,name,applied) VALUES ('auth','0001_initial',now());
+         CREATE TABLE _prisma_migrations(id text PRIMARY KEY, migration_name text); INSERT INTO _prisma_migrations VALUES ('m1','init');
+         CREATE TABLE alembic_version(version_num varchar PRIMARY KEY); INSERT INTO alembic_version VALUES ('abc123');
+         CREATE TABLE \"__EFMigrationsHistory\"(\"MigrationId\" varchar PRIMARY KEY, \"ProductVersion\" varchar); INSERT INTO \"__EFMigrationsHistory\" VALUES ('20260101_Init','9.0');
+         CREATE SCHEMA \"App.Core\"; CREATE TABLE \"App.Core\".schema_migrations(version varchar PRIMARY KEY); INSERT INTO \"App.Core\".schema_migrations VALUES ('1');",
+    );
+    assert_eq!(q.code, 0, "{}", q.all());
+    let p = Pgx::new();
+    p.init_ok();
+    p.start_ok();
+    let r = p.copy_json(&src, "bk", "bk_tpl", &["--schema-only"]);
+    assert_eq!(r.code, 0, "{}", r.all());
+    let j = r.json();
+    assert_eq!(j["schema_only"], true, "{j}");
+    let kept = j["bookkeeping_tables"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{j}"));
+    let names: Vec<&str> = kept.iter().map(|v| v.as_str().unwrap()).collect();
+    for t in [
+        "schema_migrations",
+        "ar_internal_metadata",
+        "django_migrations",
+        "_prisma_migrations",
+        "alembic_version",
+    ] {
+        assert!(names.contains(&t), "{t} missing from {names:?}");
+    }
+    assert_eq!(
+        p.psql("bk_tpl", "SELECT count(*) FROM users").stdout.trim(),
+        "0",
+        "no application rows"
+    );
+    assert_eq!(
+        p.psql("bk_tpl", "SELECT count(*) FROM schema_migrations")
+            .stdout
+            .trim(),
+        "2"
+    );
+    assert_eq!(
+        p.psql("bk_tpl", "SELECT count(*) FROM ar_internal_metadata")
+            .stdout
+            .trim(),
+        "2"
+    );
+    assert_eq!(
+        p.psql("bk_tpl", "SELECT count(*) FROM django_migrations")
+            .stdout
+            .trim(),
+        "1"
+    );
+    assert_eq!(
+        p.psql("bk_tpl", "SELECT count(*) FROM _prisma_migrations")
+            .stdout
+            .trim(),
+        "1"
+    );
+    assert_eq!(
+        p.psql("bk_tpl", "SELECT count(*) FROM alembic_version")
+            .stdout
+            .trim(),
+        "1"
+    );
+    assert_eq!(
+        p.psql("bk_tpl", "SELECT count(*) FROM \"__EFMigrationsHistory\"")
+            .stdout
+            .trim(),
+        "1",
+        "mixed-case names are quoted for pg_dump"
+    );
+    assert_eq!(
+        p.psql(
+            "bk_tpl",
+            "SELECT count(*) FROM \"App.Core\".schema_migrations"
+        )
+        .stdout
+        .trim(),
+        "1",
+        "schemas with dots are quoted for pg_dump"
+    );
+    // Human output says so.
+    let h = p.copy(&src, "bk", "bk_tpl2", &["--schema-only"]);
+    assert!(
+        h.stdout.contains("migration bookkeeping") || h.stderr.contains("migration bookkeeping"),
+        "{}",
+        h.all()
+    );
+}

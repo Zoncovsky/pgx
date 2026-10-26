@@ -1,0 +1,11 @@
+default: &default
+  adapter: postgresql
+  host: localhost
+  username: dev
+  password: devpass
+development:
+  <<: *default
+  database: myapp_development
+test:
+  <<: *default
+  database: myapp_test

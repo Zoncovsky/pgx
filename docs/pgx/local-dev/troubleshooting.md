@@ -21,3 +21,21 @@ Run `pgx doctor` first; it names most problems and the fix.
 | `pgx ls` shows `_pgxcopy_… abandoned` | A `pgx copy` process was killed. The next `pgx copy` removes it, or `pgx drop _pgxcopy_… --force`. |
 
 Logs: `$PGX_HOME/log/pgx.log`. Status as JSON: `pgx --json status`.
+
+## Coding agents
+
+`pgx agent doctor` checks the project (`.pgx.toml`, hooks per host, the
+source template) and, inside a session, whether `DATABASE_URL` names the
+session's branch. The Skill's own list is in
+[skills/pgx/references/troubleshooting.md](../../../skills/pgx/references/troubleshooting.md).
+
+| Symptom | Cause / fix |
+|---|---|
+| `PGX_ISOLATION=failed`, `DATABASE_URL` points at port 1 | The SessionStart hook could not create a branch and failed closed; `PGX_ISOLATION_REASON` says why (missing source, busy source, PGX not initialised). Fix it, start a new session. |
+| No "PGX: this session's database is …" line at session start | Hooks not installed, or the hook's shell cannot find `pgx`. `pgx agent doctor` → `hooks:<host>`; `pgx agent install <host>` reports the self-test and the `pgx` it resolved; link the binary into `~/.local/bin` for Dock-launched editors. |
+| `pgx agent up` → exit 6, "a branch source must be idle" | Something is connected to the template. Keep `<app>_template` for branching only. |
+| Rails prints `ActiveRecord::EnvironmentMismatchError` after a green test run | The branch's `ar_internal_metadata` says `development`; the spawned `db:test:prepare` refuses to purge. Harmless. Never run `db:environment:set` in a branch. |
+| Rails re-ran every migration on a fresh branch | The template was imported schema-only by a `pgx copy` older than 0.1.1. Re-import (bookkeeping rows are now kept). |
+| Codex commands cannot connect; `CODEX_SANDBOX_NETWORK_DISABLED=1` | The `workspace-write` sandbox blocks loopback TCP. `sandbox_workspace_write.network_access = true` in `.codex/config.toml` (the user's decision). |
+| Cursor: variables missing after reopening a stopped chat | Cursor does not re-run `sessionStart` on reopen. Start a new chat, or `pgx agent exec -- <command>`. |
+| A branch outlived its session | Grace period (10 min) or idle TTL (2 h) not yet reached; the supervisor removes it. `pgx agent down --now` drops it at once. |

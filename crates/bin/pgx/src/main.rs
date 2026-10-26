@@ -60,6 +60,9 @@ fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
         Command::Run => cmd::run::run(&out),
         Command::Supervise => cmd::supervise::run(&out),
         Command::Doctor => cmd::doctor::run(&out),
+        // Agent commands manage initialisation themselves (`setup` initialises;
+        // `hook` must degrade gracefully instead of pointing at `pgx init`).
+        Command::Agent(cmd) => cmd::agent::run(&out, cmd),
         other => {
             let home = layout::Home::resolve();
             if !home.is_initialized() {
@@ -93,6 +96,7 @@ fn run(global: cli::Global, command: Command) -> Result<ExitCode> {
                 | Command::Init { .. }
                 | Command::Run
                 | Command::Doctor
+                | Command::Agent(_)
                 | Command::Serve
                 | Command::Supervise => unreachable!(),
             }

@@ -92,12 +92,37 @@ jobs:
         run: |
           python3 -I tests/pgx/test_sql.py
           cargo test -p pgx --release --test lifecycle --test databases --test clone --test branch --test doctor --test run --test ttl --test copy
+      - name: Agent lifecycle suites (pgx agent up/hook/exec/install)
+        run: cargo test -p pgx --release --test agent --test agent_hook --test agent_exec --test agent_install
+      - name: Skill end-to-end (real PGX, real PostgreSQL, skills CLI)
+        run: PGX_BIN=target/release/pgx PG_BINDIR="$PG18_BINDIR" skills/tests/pgx/e2e.sh
       - name: Installer end-to-end
         run: dist/test/install_test.sh
       - name: Installer discovery/version/checksum/download tests
         run: dist/test/install_discovery_test.sh
       - name: npm wrapper end-to-end against the assembled distribution
         run: PGX_TARBALL_DIR="$RUNNER_TEMP/rel" dist/test/npm_test.sh
+  skill:
+    name: pgx Skill (validator, contract, discovery)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Official Agent Skills validator
+        run: pipx run skills-ref validate skills/pgx
+      - name: Skill contract and detection fixtures
+        run: skills/tests/pgx/run.sh
+      - name: Discovery with the skills CLI (local path, as the public install would see it)
+        run: |
+          mkdir -p "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj" && git init -q .
+          npx -y skills@latest add "$GITHUB_WORKSPACE/skills/pgx" --list | tee list.txt
+          grep -q 'pgx' list.txt
+          npx -y skills@latest add "$GITHUB_WORKSPACE/skills/pgx" -a claude-code codex cursor -y
+          test -f .claude/skills/pgx/SKILL.md && test -f .agents/skills/pgx/SKILL.md
+          test ! -e .claude/skills/pgx/tests
   docker:
     name: Docker image (${{ matrix.os }})
     strategy:

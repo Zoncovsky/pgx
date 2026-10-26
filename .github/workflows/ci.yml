@@ -108,7 +108,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        # the skills CLI needs fs/promises.glob (Node 22+)
+        with: { node-version: 22 }
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Official Agent Skills validator

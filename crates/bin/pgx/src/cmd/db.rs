@@ -216,6 +216,9 @@ pub fn drop(out: &Out, name: &str, force: bool) -> Result<ExitCode> {
         }
     })?;
     client.close();
+    // The TTL record (and any agent ownership) goes with the database, so a
+    // later database under this name starts with no history to inherit.
+    crate::ttlstore::MetaStore::new(&ctx.home.root).remove(name.as_str())?;
     out.emit(
         &format!("dropped database {name}"),
         json!({"dropped": name.as_str(), "forced": force}),

@@ -21,9 +21,17 @@ pub const PATH_SUFFIX: &str = "$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin
 
 /// The guarded command: without `pgx` on the PATH it is a silent no-op, so a
 /// committed hook file is harmless for a teammate who has not installed PGX.
-pub fn hook_command() -> String {
+pub fn hook_command(host: Host) -> String {
+    // The Claude file stays host-less: Cursor's compat loader reads it too and
+    // the payload decides. Cursor's and Codex's own files name their host, so
+    // detection never depends on environment variables those hosts may omit.
+    let flag = match host {
+        Host::Claude => "",
+        Host::Cursor => " --host cursor",
+        Host::Codex => " --host codex",
+    };
     format!(
-        "/bin/sh -c 'PATH=\"$PATH:{PATH_SUFFIX}\"; command -v pgx >/dev/null 2>&1 && exec pgx agent hook; exit 0'"
+        "/bin/sh -c 'PATH=\"$PATH:{PATH_SUFFIX}\"; command -v pgx >/dev/null 2>&1 && exec pgx agent hook{flag}; exit 0'"
     )
 }
 
@@ -53,9 +61,9 @@ fn events(host: Host) -> Vec<(&'static str, Option<&'static str>, u64)> {
 
 fn entry(host: Host, matcher: Option<&str>, timeout: u64) -> Value {
     match host {
-        Host::Cursor => json!({"command": hook_command(), "timeout": timeout}),
+        Host::Cursor => json!({"command": hook_command(host), "timeout": timeout}),
         _ => {
-            let mut e = json!({"hooks": [{"type": "command", "command": hook_command(), "timeout": timeout}]});
+            let mut e = json!({"hooks": [{"type": "command", "command": hook_command(host), "timeout": timeout}]});
             if let Some(m) = matcher {
                 e["matcher"] = json!(m);
             }
@@ -482,7 +490,11 @@ pub fn setup(out: &Out, opts: SetupOpts, cwd: &Path) -> Result<ExitCode> {
     let mut client = ctx.connect("postgres")?;
     let existed = crate::cmd::db::exists(&ctx, &mut client, &source)?;
     if !existed {
-        if opts.source.is_some() && source_name != project::DEFAULT_SOURCE {
+        // A named source (flag or committed .pgx.toml) that is missing is an
+        // error: creating it empty would make every session branch from
+        // nothing while the context line claims a copy of the real template.
+        let named = opts.source.is_some() || project.source.is_some();
+        if named && source_name != project::DEFAULT_SOURCE {
             return Err(PgxError::new(
                 ExitCode::NotFound,
                 format!("source database {source} does not exist"),
@@ -657,9 +669,12 @@ mod tests {
 
     #[test]
     fn the_hook_command_is_guarded() {
-        let c = hook_command();
+        let c = hook_command(Host::Claude);
         assert!(c.contains("command -v pgx"));
         assert!(c.ends_with("exit 0'"));
         assert!(c.contains(MARKER));
+        assert!(!c.contains("--host"));
+        assert!(hook_command(Host::Codex).contains("pgx agent hook --host codex"));
+        assert!(hook_command(Host::Cursor).contains("pgx agent hook --host cursor"));
     }
 }

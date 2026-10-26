@@ -475,7 +475,8 @@ pub fn down(r: &Resolved, now_flag: bool) -> Result<DownResult> {
         if ctx.running_pid().is_some() {
             if let Ok(mut client) = ctx.connect("postgres") {
                 if let Ok(Some(oid)) = database_oid(&mut client, &rec.name) {
-                    if oid != rec.oid {
+                    let live = rec.agent.as_ref().is_some_and(|m| !m.retired);
+                    if oid != rec.oid && live {
                         rec.oid = oid;
                         store.save(&rec)?;
                     }

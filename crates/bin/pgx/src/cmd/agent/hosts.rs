@@ -90,7 +90,10 @@ pub fn detect(
         None => {
             if obj.contains_key("conversation_id") || has(env, "CURSOR_VERSION") {
                 Host::Cursor
-            } else if has(env, "CLAUDE_ENV_FILE") || has(env, "CLAUDE_CODE_SESSION_ID") {
+            } else if has(env, "CLAUDE_ENV_FILE")
+                || has(env, "CLAUDE_CODE_SESSION_ID")
+                || has(env, "CLAUDE_PROJECT_DIR")
+            {
                 Host::Claude
             } else if has(env, "CODEX_THREAD_ID") || has(env, "CODEX_SESSION_ID") {
                 Host::Codex
@@ -100,7 +103,10 @@ pub fn detect(
                     .next()
                     .is_some_and(|c| c.is_ascii_uppercase())
             {
-                Host::Claude
+                // Claude Code sets CLAUDE_PROJECT_DIR for every hook; a
+                // PascalCase payload with no host variable at all is Codex,
+                // whose hook processes carry none.
+                Host::Codex
             } else {
                 return Err(PgxError::usage(
                     "cannot tell which agent sent this hook payload; pass --host claude|cursor|codex",
@@ -271,15 +277,24 @@ mod tests {
     }
 
     #[test]
-    fn claude_is_recognised_by_payload_shape_without_env() {
+    fn claude_is_recognised_by_its_project_dir_and_envless_pascalcase_is_codex() {
+        // Claude Code sets CLAUDE_PROJECT_DIR for every hook; Codex hooks carry
+        // no host variables at all, so a bare PascalCase payload is Codex.
+        let h = detect(
+            &claude("SessionStart", json!({"source": "resume"})),
+            &env(&[("CLAUDE_PROJECT_DIR", "/w")]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(h.host, Host::Claude);
+        assert_eq!(h.event, Event::Start);
         let h = detect(
             &claude("SessionStart", json!({"source": "resume"})),
             &env(&[]),
             None,
         )
         .unwrap();
-        assert_eq!(h.host, Host::Claude);
-        assert_eq!(h.event, Event::Start);
+        assert_eq!(h.host, Host::Codex);
     }
 
     #[test]
@@ -381,10 +396,10 @@ mod tests {
                 .event,
             Event::End
         );
-        // Without the env var, a Claude-shaped payload is Claude: Codex users get
-        // Codex semantics only when Codex identifies itself or --host says so.
+        // Without any host variable a PascalCase payload is Codex (Claude always
+        // sets CLAUDE_PROJECT_DIR for hooks).
         let h = detect(&codex("SessionStart", json!({})), &env(&[]), None).unwrap();
-        assert_eq!(h.host, Host::Claude);
+        assert_eq!(h.host, Host::Codex);
         let h = detect(&codex("SessionStart", json!({})), &env(&[]), Some("codex")).unwrap();
         assert_eq!(h.host, Host::Codex);
     }

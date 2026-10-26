@@ -68,9 +68,18 @@ fn write_claude_env(env: &HashMap<String, String>, lines: &str) {
                 notice(&format!("cannot write {path}: {e}"));
             }
         }
-        None => notice(&format!(
-            "CLAUDE_ENV_FILE is not set (not a SessionStart hook?); the session environment would have been:\n{lines}"
-        )),
+        None => {
+            // Never echo values (the URL carries the password): names only.
+            let names: Vec<&str> = lines
+                .lines()
+                .filter_map(|l| l.strip_prefix("export "))
+                .filter_map(|l| l.split('=').next())
+                .collect();
+            notice(&format!(
+                "CLAUDE_ENV_FILE is not set (not a SessionStart hook?); could not export {}",
+                names.join(", ")
+            ))
+        }
     }
 }
 
@@ -125,6 +134,10 @@ fn emit_failure(
                 json!({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}})
             ),
         }
+        // Hosts apply a hook's output only on exit 0 (Cursor drops the JSON,
+        // Claude drops the context): the sentinel travels on success, the
+        // stderr notice explains. Exit 1 is for the case nothing was emitted.
+        return ExitCode::Ok;
     }
     ExitCode::Failure
 }

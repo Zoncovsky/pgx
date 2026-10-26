@@ -31,8 +31,10 @@ fn is_repo_root(dir: &Path) -> bool {
     dir.join(".git").exists()
 }
 
-/// Walk up from `dir` looking first for `.pgx.toml`, then for a repository
-/// root. Returns `(root, config_file)`.
+/// Walk up from `dir` to the first directory that holds `.pgx.toml` or is a
+/// repository root, whichever comes first. One walk, so a stray `.pgx.toml`
+/// above a repository (say in `$HOME`) can never claim the repository's
+/// projects. Returns `(root, config_file)`.
 fn find_root(dir: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
     let mut cur = Some(dir);
     while let Some(d) = cur {
@@ -40,10 +42,6 @@ fn find_root(dir: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
         if f.is_file() {
             return Some((d.to_path_buf(), Some(f)));
         }
-        cur = d.parent();
-    }
-    let mut cur = Some(dir);
-    while let Some(d) = cur {
         if is_repo_root(d) {
             return Some((d.to_path_buf(), None));
         }
@@ -283,6 +281,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(wt);
         let _ = std::fs::remove_dir_all(bare);
+    }
+
+    #[test]
+    fn a_pgx_toml_above_the_repository_does_not_hijack_the_project() {
+        // ~/.pgx.toml left by an accidental setup must not turn every repo
+        // under ~ into one project with someone else's source.
+        let outer = tmp("outer");
+        std::fs::write(outer.join(".pgx.toml"), "[agent]\nsource = \"stray\"\n").unwrap();
+        std::fs::create_dir_all(outer.join("repo/.git")).unwrap();
+        std::fs::create_dir_all(outer.join("repo/src")).unwrap();
+        let p = locate(&outer.join("repo/src"), &[]).unwrap();
+        assert_eq!(p.root, std::fs::canonicalize(outer.join("repo")).unwrap());
+        assert!(p.source.is_none(), "{p:?}");
+        assert!(p.config_file.is_none());
+        // A toml inside the repository root still wins.
+        std::fs::write(outer.join("repo/.pgx.toml"), "[agent]\nsource = \"mine\"\n").unwrap();
+        assert_eq!(
+            locate(&outer.join("repo/src"), &[])
+                .unwrap()
+                .source
+                .as_deref(),
+            Some("mine")
+        );
+        let _ = std::fs::remove_dir_all(outer);
     }
 
     #[test]

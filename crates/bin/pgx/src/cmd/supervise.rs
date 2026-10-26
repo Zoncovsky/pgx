@@ -147,7 +147,10 @@ fn expire_one(
             // new incarnation under that name was recreated by the session
             // (a framework purge) and is still its disposable branch. Any
             // other database keeps the rule: a reused name is never touched.
-            if rec.agent.is_some() {
+            // Only a live session can have recreated it; a retired session
+            // is gone, so a same-name newcomer is foreign and the stale
+            // record is simply forgotten.
+            if rec.agent.as_ref().is_some_and(|m| !m.retired) {
                 rec.oid = oid;
                 store.save(&rec)?;
             } else {

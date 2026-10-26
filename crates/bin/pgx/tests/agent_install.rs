@@ -118,6 +118,10 @@ fn install_merges_and_preserves_foreign_hooks() {
     assert_eq!(ours(&s["hooks"]["SessionEnd"]), 1);
     assert_eq!(ours(&s["hooks"]["PreToolUse"]), 1);
     assert_eq!(s["hooks"]["PreToolUse"][0]["matcher"], "Edit");
+    assert!(
+        !s.to_string().contains("--host"),
+        "the Claude file is host-less: {s}"
+    );
     let mine = s["hooks"]["PreToolUse"]
         .as_array()
         .unwrap()
@@ -188,6 +192,22 @@ fn install_cursor_codex_and_scopes() {
     for ev in ["SessionStart", "UserPromptSubmit", "SessionEnd"] {
         assert_eq!(ours(&x["hooks"][ev]), 1, "{ev}: {x}");
     }
+    // Host-specific files name their host (Codex hooks carry no host variables);
+    // the Claude file stays host-less because Cursor's compat loader reads it too.
+    assert!(
+        x["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("pgx agent hook --host codex"),
+        "{x}"
+    );
+    assert!(
+        c["hooks"]["sessionStart"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("pgx agent hook --host cursor"),
+        "{c}"
+    );
     assert!(std::fs::read_to_string(l.proj.join(".pgx.toml"))
         .unwrap()
         .contains("source = \"myapp\""));
@@ -332,7 +352,14 @@ fn hook_command_self_test_resolves_pgx_on_the_installed_path() {
             .ends_with(".local/bin/pgx"),
         "{j}"
     );
-    assert_eq!(j["selftest"]["version"], env!("CARGO_PKG_VERSION"), "{j}");
+    // The version comes from the distribution's dist.json (CI labels it
+    // 0.0.0-ci.<sha>), so only its presence is asserted.
+    assert!(
+        j["selftest"]["version"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty()),
+        "{j}"
+    );
 }
 
 #[test]
@@ -518,5 +545,41 @@ fn doctor_reports_hooks_source_and_sessions() {
             .unwrap()
             .contains("duplicate"),
         "{j}"
+    );
+}
+
+#[test]
+fn setup_refuses_a_committed_source_that_does_not_exist() {
+    // A teammate's clone carries .pgx.toml naming a template this machine
+    // has not imported yet: setup must say so, not create an empty database
+    // under that name and let every session branch from nothing.
+    let l = lab(true);
+    std::fs::write(
+        l.proj.join(".pgx.toml"),
+        "[agent]\nsource = \"team_template\"\n",
+    )
+    .unwrap();
+    let r = l.run(&l.proj, &[], &["setup", "--hosts", "claude"]);
+    assert_eq!(r.code, 5, "{}", r.all());
+    assert!(
+        r.json()["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("pgx copy"),
+        "{}",
+        r.all()
+    );
+    assert_eq!(
+        l.p.psql(
+            "postgres",
+            "SELECT count(*) FROM pg_database WHERE datname='team_template'"
+        )
+        .stdout
+        .trim(),
+        "0"
+    );
+    assert!(
+        !l.proj.join(".claude").exists(),
+        "no hooks installed on failure"
     );
 }

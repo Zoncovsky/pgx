@@ -442,7 +442,12 @@ fn missing_source_with_pgx_toml_fails_closed() {
         &[],
         &claude("SessionStart", sid, &proj, json!({})),
     );
-    assert_eq!(r.code, 1, "non-blocking failure: {}", r.all());
+    assert_eq!(
+        r.code,
+        0,
+        "fail closed travels on exit 0 (hosts drop non-zero output): {}",
+        r.all()
+    );
     assert!(r.stderr.contains("nope"), "{}", r.all());
     assert!(
         r.stdout
@@ -479,7 +484,7 @@ fn missing_source_with_pgx_toml_fails_closed() {
             json!({}),
         ),
     );
-    assert_eq!(r.code, 1, "{}", r.all());
+    assert_eq!(r.code, 0, "Cursor applies env only on exit 0: {}", r.all());
     let j = r.json();
     assert_eq!(j["env"]["PGX_ISOLATION"], "failed", "{j}");
     assert!(
@@ -516,7 +521,7 @@ fn uninitialised_pgx_with_pgx_toml_fails_closed_and_without_it_only_warns() {
         &[],
         &claude("SessionStart", sid, &proj, json!({})),
     );
-    assert_eq!(r.code, 1, "{}", r.all());
+    assert_eq!(r.code, 0, "{}", r.all());
     assert!(std::fs::read_to_string(&ef)
         .unwrap()
         .contains("PGX_ISOLATION='failed'"));
@@ -584,4 +589,58 @@ fn hook_ignores_cursor_events_it_does_not_handle() {
     );
     assert_eq!(r.code, 0, "{}", r.all());
     assert_eq!(r.stdout, "");
+}
+
+#[test]
+fn codex_hook_without_host_variables_is_still_codex_and_leaks_nothing() {
+    // Codex hook processes carry no CODEX_* variables; a PascalCase payload
+    // with no CLAUDE_* variables is Codex, and in no case may the hook print
+    // a password-bearing URL anywhere.
+    let (p, proj) = up_with_source();
+    let sid = "0199c3a2-7b1e-7c3f-9d2a-5e6f7a8b9c0e";
+    let r = hook(
+        &p,
+        &[],
+        &[],
+        &codex("SessionStart", sid, &proj, json!({"source": "startup"})),
+    );
+    assert_eq!(r.code, 0, "{}", r.all());
+    let j = r.json();
+    assert!(
+        j["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("agent-codex-0199c3a2"),
+        "{j}"
+    );
+    assert!(
+        !r.stderr.contains(&p.password()) && !r.stdout.contains(&p.password()),
+        "{}",
+        r.all()
+    );
+    // Forced --host codex (what install writes into .codex/hooks.json) works the same.
+    let r = hook(
+        &p,
+        &[],
+        &["--host", "codex"],
+        &codex("UserPromptSubmit", sid, &proj, json!({})),
+    );
+    assert_eq!(r.code, 0, "{}", r.all());
+    // A Claude payload whose CLAUDE_ENV_FILE is missing must not print exports with secrets either.
+    let r = hook(
+        &p,
+        &[("CLAUDE_PROJECT_DIR", proj.to_str().unwrap())],
+        &[],
+        &claude(
+            "SessionStart",
+            "abababab-aaaa-bbbb-cccc-dddddddddddd",
+            &proj,
+            json!({}),
+        ),
+    );
+    assert!(
+        !r.stderr.contains(&p.password()) && !r.stdout.contains(&p.password()),
+        "{}",
+        r.all()
+    );
 }

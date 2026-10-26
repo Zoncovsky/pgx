@@ -849,7 +849,9 @@ fn b2_schema_only_keeps_migration_bookkeeping_rows() {
          INSERT INTO ar_internal_metadata VALUES ('environment','development',now(),now()),('schema_sha1','abc',now(),now());
          CREATE TABLE django_migrations(id serial PRIMARY KEY, app text, name text, applied timestamptz); INSERT INTO django_migrations(app,name,applied) VALUES ('auth','0001_initial',now());
          CREATE TABLE _prisma_migrations(id text PRIMARY KEY, migration_name text); INSERT INTO _prisma_migrations VALUES ('m1','init');
-         CREATE TABLE alembic_version(version_num varchar PRIMARY KEY); INSERT INTO alembic_version VALUES ('abc123');",
+         CREATE TABLE alembic_version(version_num varchar PRIMARY KEY); INSERT INTO alembic_version VALUES ('abc123');
+         CREATE TABLE \"__EFMigrationsHistory\"(\"MigrationId\" varchar PRIMARY KEY, \"ProductVersion\" varchar); INSERT INTO \"__EFMigrationsHistory\" VALUES ('20260101_Init','9.0');
+         CREATE SCHEMA \"App.Core\"; CREATE TABLE \"App.Core\".schema_migrations(version varchar PRIMARY KEY); INSERT INTO \"App.Core\".schema_migrations VALUES ('1');",
     );
     assert_eq!(q.code, 0, "{}", q.all());
     let p = Pgx::new();
@@ -906,6 +908,23 @@ fn b2_schema_only_keeps_migration_bookkeeping_rows() {
             .stdout
             .trim(),
         "1"
+    );
+    assert_eq!(
+        p.psql("bk_tpl", "SELECT count(*) FROM \"__EFMigrationsHistory\"")
+            .stdout
+            .trim(),
+        "1",
+        "mixed-case names are quoted for pg_dump"
+    );
+    assert_eq!(
+        p.psql(
+            "bk_tpl",
+            "SELECT count(*) FROM \"App.Core\".schema_migrations"
+        )
+        .stdout
+        .trim(),
+        "1",
+        "schemas with dots are quoted for pg_dump"
     );
     // Human output says so.
     let h = p.copy(&src, "bk", "bk_tpl2", &["--schema-only"]);

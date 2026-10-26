@@ -913,11 +913,16 @@ fn run_inner(out: &Out, opts: Opts) -> Result<ExitCode> {
         if !present.is_empty() {
             let t = Instant::now();
             let data_dump = tmp_dir.join("bookkeeping.dump");
-            let mut args: Vec<String> = vec!["--data-only".to_string()];
+            // `--table` takes a psql-style pattern: unquoted names are
+            // lower-cased and `.` is a separator, so every part is quoted,
+            // and --strict-names makes a non-match loud instead of silent.
+            let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+            let mut args: Vec<String> =
+                vec!["--data-only".to_string(), "--strict-names".to_string()];
             for (schema, name) in &present {
                 args.push(match schema {
-                    Some(sch) => format!("--table={sch}.{name}"),
-                    None => format!("--table={name}"),
+                    Some(sch) => format!("--table={}.{}", q(sch), q(name)),
+                    None => format!("--table={}", q(name)),
                 });
             }
             let arg_refs: Vec<&str> = args.iter().map(|a| a.as_str()).collect();

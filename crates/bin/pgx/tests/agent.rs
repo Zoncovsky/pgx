@@ -742,3 +742,77 @@ fn a_database_the_session_recreates_is_adopted_not_orphaned() {
     assert_eq!(d["dropped"], false, "{d}");
     assert_eq!(agent_ls(&p, &proj)[0]["state"], "retired");
 }
+
+#[test]
+fn pgx_drop_forgets_the_agent_record_and_a_retired_session_never_adopts() {
+    let (p, proj) = up_with_source();
+    // pgx drop of an agent branch leaves no record behind that a later
+    // same-name database could inherit.
+    let j = agent(
+        &p,
+        &proj,
+        &SRC,
+        &["up", "--id", "d1d1d1d1-drop", "--host", "claude"],
+    )
+    .json();
+    let branch = j["branch"].as_str().unwrap().to_string();
+    assert_eq!(p.run(&["drop", &branch, "--force"]).code, 0);
+    assert!(
+        agent_ls(&p, &proj).is_empty(),
+        "record must go with the database"
+    );
+    let r = p.psql("postgres", &format!("CREATE DATABASE \"{branch}\""));
+    assert_eq!(r.code, 0, "{}", r.all());
+    let d = agent(
+        &p,
+        &proj,
+        &SRC,
+        &["down", "--id", "d1d1d1d1-drop", "--host", "claude", "--now"],
+    );
+    assert_eq!(
+        d.code,
+        5,
+        "a database with a forgotten name is foreign: {}",
+        d.all()
+    );
+    assert!(db_exists(&p, &branch));
+    // A session that ended (retired) cannot be the author of a same-name
+    // database that appears later: the supervisor must not adopt and drop it.
+    let j = agent(
+        &p,
+        &proj,
+        &SRC,
+        &["up", "--id", "d2d2d2d2-ret", "--host", "claude"],
+    )
+    .json();
+    let b2 = j["branch"].as_str().unwrap().to_string();
+    let d = agent(
+        &p,
+        &proj,
+        &SRC,
+        &[
+            "down",
+            "--id",
+            "d2d2d2d2-ret",
+            "--host",
+            "claude",
+            "--grace",
+            "3s",
+        ],
+    )
+    .json();
+    assert_eq!(d["dropped"], false, "{d}");
+    p.psql("postgres", &format!("DROP DATABASE \"{b2}\""));
+    p.psql("postgres", &format!("CREATE DATABASE \"{b2}\""));
+    let t0 = Instant::now();
+    while agent_ls(&p, &proj).iter().any(|r| r["name"] == b2)
+        && t0.elapsed() < Duration::from_secs(25)
+    {
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert!(
+        agent_ls(&p, &proj).iter().all(|r| r["name"] != b2),
+        "stale record should be forgotten"
+    );
+    assert!(db_exists(&p, &b2), "the foreign database survives");
+}

@@ -10,6 +10,9 @@ use crate::errors::{PgxError, Result};
 use crate::out::Out;
 use std::path::PathBuf;
 
+pub mod identity;
+pub mod project;
+
 /// Where hook configuration is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {

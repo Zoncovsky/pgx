@@ -50,8 +50,11 @@ cloud Postgres administration. PGX is a development tool.
    approval in this conversation.** Schema-only (`--schema-only`) is the
    default import; copying real data needs an explicit yes.
 2. **Never print passwords or credentialed connection URLs** into the
-   conversation, logs, commits or files. `scripts/detect-project.sh` is
-   written to leave them out; keep it that way in your own output.
+   conversation, logs, commits or files, and never read credential-bearing
+   files to "understand the setup": not `~/.pgx/config.json`, not
+   `~/.codex/config.toml`, `~/.claude/*`, `~/.cursor/*`, `.pgpass`, nor the
+   contents of `.env*`. `scripts/detect-project.sh` and `pgx --json
+   status|url|agent doctor` give you every fact you need without secrets.
 3. **Fail closed.** If isolation is enabled (`.pgx.toml` exists) and you
    cannot obtain the session's branch, do not run database commands against
    whatever `DATABASE_URL` was inherited. Diagnose (`pgx agent doctor`),

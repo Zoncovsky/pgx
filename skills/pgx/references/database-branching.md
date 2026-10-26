@@ -36,7 +36,14 @@ troubleshooting.md), or unset (no branch for this shell: use
 
 ## Framework notes
 
-- **Rails**: `DATABASE_URL` overrides `config/database.yml` when set. Parallel
+- **Rails**: `DATABASE_URL` overrides `config/database.yml` when set, for
+  every environment, so `bin/rails test` runs against the branch too. A branch
+  of a template imported from a development database carries
+  `environment = development` in `ar_internal_metadata`; Rails' spawned
+  `db:test:prepare` then aborts with `ActiveRecord::EnvironmentMismatchError`
+  after the tests have already passed. That abort is harmless (the parent run
+  exits 0) and it keeps Rails from purging the branch; do not run
+  `db:environment:set` to silence it. Parallel
   tests create `agent-…-0`, `agent-…-1` databases in PGX; they are ordinary
   databases without a TTL, so run `PARALLEL_WORKERS=1` or drop them with
   `pgx drop` afterwards, or accept them (they are small). `db:prepare`,

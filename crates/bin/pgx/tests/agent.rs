@@ -669,3 +669,76 @@ fn pgx_doctor_and_pgx_ls_know_about_agent_branches() {
         .unwrap_or_else(|| panic!("{}", ls.all()));
     assert!(line.contains("2h (claude)"), "{line}");
 }
+
+#[test]
+fn a_database_the_session_recreates_is_adopted_not_orphaned() {
+    // Rails `db:reset`/purge drops and recreates the branch under the same
+    // name from inside the session. The new incarnation must stay this
+    // session's branch: `up` adopts it, `down --now` drops it, nothing leaks.
+    let (p, proj) = up_with_source();
+    let j = agent(
+        &p,
+        &proj,
+        &SRC,
+        &["up", "--id", "e0e0e0e0-recreate", "--host", "claude"],
+    )
+    .json();
+    let branch = j["branch"].as_str().unwrap().to_string();
+    assert_eq!(branch, "agent-claude-e0e0e0e0");
+    let r = p.psql("postgres", &format!("DROP DATABASE \"{branch}\""));
+    assert_eq!(r.code, 0, "{}", r.all());
+    let r = p.psql("postgres", &format!("CREATE DATABASE \"{branch}\""));
+    assert_eq!(r.code, 0, "{}", r.all());
+    let j2 = agent(
+        &p,
+        &proj,
+        &SRC,
+        &["up", "--id", "e0e0e0e0-recreate", "--host", "claude"],
+    )
+    .json();
+    assert_eq!(j2["branch"], branch, "same name, adopted: {j2}");
+    assert_eq!(j2["created"], false, "{j2}");
+    assert_eq!(j2["adopted"], true, "{j2}");
+    let rows = agent_ls(&p, &proj);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["state"], "active");
+    // down --now removes the recreated database too (ownership by name + record).
+    let d = agent(
+        &p,
+        &proj,
+        &SRC,
+        &[
+            "down",
+            "--id",
+            "e0e0e0e0-recreate",
+            "--host",
+            "claude",
+            "--now",
+        ],
+    )
+    .json();
+    assert_eq!(d["dropped"], true, "{d}");
+    assert!(!db_exists(&p, &branch));
+    assert!(agent_ls(&p, &proj).is_empty());
+    // A recreated database that the session never touches again is still
+    // retired by SessionEnd (down adopts too), so the grace period applies.
+    let j3 = agent(
+        &p,
+        &proj,
+        &SRC,
+        &["up", "--id", "f1f1f1f1-recreate", "--host", "claude"],
+    )
+    .json();
+    let b3 = j3["branch"].as_str().unwrap().to_string();
+    p.psql("postgres", &format!("DROP DATABASE \"{b3}\""));
+    p.psql("postgres", &format!("CREATE DATABASE \"{b3}\""));
+    let d = agent(
+        &p,
+        &proj,
+        &SRC,
+        &["down", "--id", "f1f1f1f1-recreate", "--host", "claude"],
+    )
+    .json();
+    assert_eq!(d["dropped"], false, "{d}");
+    assert_eq!(agent_ls(&p, &proj)[0]["state"], "retired");
+}

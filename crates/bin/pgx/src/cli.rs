@@ -379,7 +379,8 @@ Import from PostgreSQL
                           pg_restore, read-only on the source) as a template to
                           branch from: `pgx copy --from \"$DATABASE_URL\" --to myapp`,
                           then `pgx branch myapp agent-1` per agent. Needs pg_dump/pg_restore on PATH or in
-                          PGX_PG_BINDIR. --schema-only skips table data;
+                          PGX_PG_BINDIR. --schema-only skips table data (migration
+                          bookkeeping rows such as schema_migrations are kept);
                           --no-optimize skips VACUUM (FREEZE, ANALYZE); --verbose
                           shows the tools' output.
 

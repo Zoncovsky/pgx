@@ -211,6 +211,9 @@ pub struct UpResult {
     pub created: bool,
     /// The previous branch for this session had vanished; this is a new one.
     pub fresh: bool,
+    /// The session dropped and recreated its branch under the same name (a
+    /// framework purge); the new incarnation was adopted.
+    pub adopted: bool,
     pub source: String,
     pub source_created: bool,
     pub expires_at: u64,
@@ -252,7 +255,13 @@ pub fn up(out: &Out, r: &Resolved) -> Result<UpResult> {
     let mut fresh = false;
     if let Some(mut rec) = find_record(&store, &r.key)? {
         match database_oid(&mut client, &rec.name)? {
-            Some(oid) if oid == rec.oid => {
+            Some(oid) => {
+                // The same OID is simply our branch. A different OID under our
+                // derived name means the session dropped and recreated it (a
+                // framework purge such as Rails db:reset): adopt the new
+                // incarnation rather than orphaning it without a TTL.
+                let adopted = oid != rec.oid;
+                rec.oid = oid;
                 rec.expires_at = Some(now + idle);
                 rec.ttl_label = r.idle_label.clone();
                 rec.ttl_seconds = Some(idle);
@@ -270,6 +279,7 @@ pub fn up(out: &Out, r: &Resolved) -> Result<UpResult> {
                     branch,
                     created: false,
                     fresh: false,
+                    adopted,
                     source: rec
                         .agent
                         .as_ref()
@@ -287,8 +297,8 @@ pub fn up(out: &Out, r: &Resolved) -> Result<UpResult> {
                     password: ctx.config.password.clone(),
                 });
             }
-            _ => {
-                // Dropped by hand, expired, or a different incarnation: forget it.
+            None => {
+                // Dropped by hand or expired: forget it and make a fresh one.
                 store.remove(&rec.name)?;
                 fresh = true;
             }
@@ -364,6 +374,7 @@ pub fn up(out: &Out, r: &Resolved) -> Result<UpResult> {
         branch,
         created: true,
         fresh,
+        adopted: false,
         source: r.source.as_str().to_string(),
         source_created,
         expires_at: now + idle,
@@ -458,6 +469,21 @@ pub fn down(r: &Resolved, now_flag: bool) -> Result<DownResult> {
             retired_until: None,
         });
     };
+    // Adopt a recreated incarnation (same derived name, new OID) so the
+    // grace period and the drop apply to what the session actually left.
+    if let Ok(ctx) = Ctx::load() {
+        if ctx.running_pid().is_some() {
+            if let Ok(mut client) = ctx.connect("postgres") {
+                if let Ok(Some(oid)) = database_oid(&mut client, &rec.name) {
+                    if oid != rec.oid {
+                        rec.oid = oid;
+                        store.save(&rec)?;
+                    }
+                }
+                client.close();
+            }
+        }
+    }
     let now = crate::fsutil::now_epoch();
     if !now_flag {
         rec.expires_at = Some(now + r.grace_secs());
@@ -567,6 +593,7 @@ pub fn up_json(res: &UpResult) -> serde_json::Value {
         "source_created": res.source_created,
         "created": res.created,
         "fresh": res.fresh,
+        "adopted": res.adopted,
         "url": res.url,
         "socket_url": res.socket_url,
         "host": res.key.host,
@@ -591,6 +618,8 @@ pub fn up_text(res: &UpResult) -> String {
         src.push_str(" (created empty: no .pgx.toml names a source)");
     } else if res.fresh {
         src.push_str(" (fresh: the previous branch was gone)");
+    } else if res.adopted {
+        src.push_str(" (adopted: the session recreated this database)");
     }
     format!(
         "✓ Branch {verb}: {}\n✓ Source: {src}\n✓ Expires in: {} after the last activity\n\nDATABASE_URL:\n{}",
@@ -703,6 +732,7 @@ pub fn env_for_existing(r: &Resolved) -> Result<String> {
         branch,
         created: false,
         fresh: false,
+        adopted: false,
         source: rec
             .agent
             .as_ref()

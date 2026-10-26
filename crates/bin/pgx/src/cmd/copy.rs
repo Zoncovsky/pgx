@@ -30,6 +30,31 @@ type Client = crate::pgwire::Client<std::os::unix::net::UnixStream>;
 pub const STAGING_PREFIX: &str = "_pgxcopy_";
 const LONG_TIMEOUT: Duration = Duration::from_secs(7 * 24 * 3600);
 
+/// Migration bookkeeping tables whose rows a `--schema-only` import keeps, so a
+/// framework sees its migrations as applied. Names as the frameworks create them.
+pub const BOOKKEEPING_TABLES: [&str; 20] = [
+    "schema_migrations",
+    "ar_internal_metadata",
+    "django_migrations",
+    "_prisma_migrations",
+    "alembic_version",
+    "flyway_schema_history",
+    "schema_version",
+    "knex_migrations",
+    "knex_migrations_lock",
+    "goose_db_version",
+    "migrations",
+    "typeorm_metadata",
+    "__drizzle_migrations",
+    "sequelizemeta",
+    "phinxlog",
+    "atlas_schema_revisions",
+    "__EFMigrationsHistory",
+    "mikro_orm_migrations",
+    "dbmate_schema_migrations",
+    "schema_info",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Opts {
     pub from: String,
@@ -874,6 +899,85 @@ fn run_inner(out: &Out, opts: Opts) -> Result<ExitCode> {
     fault("restored");
     check_interrupted()?;
 
+    // 10b. Schema-only: the framework's migration bookkeeping rows travel with
+    // the schema, or the first branch re-runs every migration and fails on
+    // tables that already exist (Rails then purges the database).
+    let mut bookkeeping: Vec<String> = Vec::new();
+    if opts.schema_only {
+        let present: Vec<(Option<String>, String)> = schema_toc
+            .entries
+            .iter()
+            .filter(|e| e.desc == "TABLE" && BOOKKEEPING_TABLES.contains(&e.name.as_str()))
+            .map(|e| (e.schema.clone(), e.name.clone()))
+            .collect();
+        if !present.is_empty() {
+            let t = Instant::now();
+            let data_dump = tmp_dir.join("bookkeeping.dump");
+            let mut args: Vec<String> = vec!["--data-only".to_string()];
+            for (schema, name) in &present {
+                args.push(match schema {
+                    Some(sch) => format!("--table={sch}.{name}"),
+                    None => format!("--table={name}"),
+                });
+            }
+            let arg_refs: Vec<&str> = args.iter().map(|a| a.as_str()).collect();
+            let mut cmd = pg_dump(&arg_refs, &data_dump);
+            let fin = pgtools::run_streaming(&mut cmd, &redactor, |_| {}, || {})?;
+            if !fin.success {
+                return Err(dump_error(&source, &fin.tail, &fin.status_text));
+            }
+            let mut cmd = Command::new(&tools.pg_restore);
+            cmd.args([
+                "--data-only",
+                "--exit-on-error",
+                "--no-owner",
+                "--no-privileges",
+            ])
+            .arg("--host")
+            .arg(ctx.sock_dir())
+            .arg("--port")
+            .arg(ctx.config.port.to_string())
+            .args(["--username", "postgres", "--no-password", "--dbname"])
+            .arg(staging_db.as_str())
+            .arg("--")
+            .arg(&data_dump)
+            .env("PGAPPNAME", "pgx copy");
+            for var in [
+                "PGPASSWORD",
+                "PGSSLPASSWORD",
+                "PGOPTIONS",
+                "PGSERVICE",
+                "PGSERVICEFILE",
+                "PGHOST",
+                "PGHOSTADDR",
+                "PGPORT",
+                "PGUSER",
+                "PGDATABASE",
+                "PGSSLMODE",
+                "PGREQUIRESSL",
+                "PGPASSFILE",
+                "PGTARGETSESSIONATTRS",
+                "PGGSSENCMODE",
+            ] {
+                cmd.env_remove(var);
+            }
+            let fin = pgtools::run_streaming(&mut cmd, &redactor, |_| {}, || {})?;
+            if !fin.success {
+                return Err(restore_error(&fin.tail, &fin.status_text));
+            }
+            bookkeeping = present.iter().map(|(_, n)| n.clone()).collect();
+            report.done(
+                "migration bookkeeping",
+                format!(
+                    "{} kept with rows: {}",
+                    plural(bookkeeping.len() as u64, "table"),
+                    bookkeeping.join(", ")
+                ),
+                t,
+            );
+        }
+    }
+
     // 11. Validate: connectivity and the inventory.
     let t = Instant::now();
     let mut sc = connect_long(&ctx, staging_db.as_str())?;
@@ -1021,6 +1125,7 @@ fn run_inner(out: &Out, opts: Opts) -> Result<ExitCode> {
                 "port": ctx.config.port,
             },
             "schema_only": opts.schema_only,
+            "bookkeeping_tables": bookkeeping,
             "optimized": opts.optimize,
             "tools": {"pg_dump": tools.version, "dir": tools.dir},
             "extensions": inv.extensions,

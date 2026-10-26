@@ -91,8 +91,10 @@ PGX database), `none` (no database yet), `remote` (another host),
 
 ### 2. Make sure PGX is available
 
-`pgx agent --help` must succeed (the `agent` command group ships from PGX
-0.1.1; a binary that lacks it is too old). If `pgx` is missing or too old,
+PGX **0.1.1 or newer** is required: `pgx --json version` must report a
+`pgx_version` of at least 0.1.1 (`pgx agent ls` exits 2 with "unknown
+command" on anything older; note that `pgx agent --help` prints the global
+help on every version and proves nothing). If `pgx` is missing or too old,
 follow [references/installation.md](references/installation.md): prefer an
 installed binary, then `npm i -g pgxdb` (Node 18+), then the official
 installer `curl -fsSL https://pgx.dev/install | sh`. Supported: macOS arm64,

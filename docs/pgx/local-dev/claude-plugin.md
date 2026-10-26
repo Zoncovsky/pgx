@@ -56,7 +56,8 @@ claude plugin details pgx      # Component inventory: Skills (1) pgx, Hooks (0),
   version), display name, links.
 - `README.md`.
 
-About 84 KB; roughly 190 tokens of context in every session while installed.
+About 84 KB, 16 files; roughly 190–270 tokens of context in every session
+while installed (`claude plugin details pgx`).
 
 It contains **no hooks, MCP servers, commands or binaries**. Installing it at
 user scope does nothing in projects that have not opted in: the Skill is
@@ -118,9 +119,9 @@ the PGX runtime and any hooks `pgx agent setup` installed all stay.
 `/plugin marketplace add pgrundev/pgx` clones the PGX repository once per
 machine into `~/.claude/plugins/marketplaces/pgrundev/` (Claude Code reads
 the catalog from a clone). The repository carries fuzzing corpora and
-benchmark results, so that clone is about 190 MB over the network and 2.2 GB
-on disk and takes one to two minutes; `claude plugin marketplace update`
-afterwards is incremental. The plugin itself is copied out of that clone:
+benchmark results, so that clone is a 192 MB shallow fetch and 2.2 GB on
+disk and takes about a minute (53 s measured); `claude plugin marketplace
+update` afterwards is incremental. The plugin itself is copied out of that clone:
 the installed plugin is the 84 KB Skill package, nothing from `crates/`,
 `fuzz/` or `benchmarks/`. From a shell you can keep the clone small:
 
@@ -128,7 +129,8 @@ the installed plugin is the 84 KB Skill package, nothing from `crates/`,
 claude plugin marketplace add pgrundev/pgx --sparse .claude-plugin plugins
 ```
 
-which checks out only the marketplace file and the plugin (a few hundred KB).
+which checks out only the marketplace file and the plugin (8 s, 72 MB
+measured).
 The in-session `/plugin marketplace add` has no sparse option. Making the
 default clone light would mean moving the corpora out of the main repository
 or hosting the catalog elsewhere; both are repository decisions outside this
@@ -136,11 +138,31 @@ plugin.
 
 ## Anthropic's plugin directory
 
-The marketplace above is self-hosted. PGX is not listed in Anthropic's
-directory; `claude plugin validate --profile directory plugins/pgx` reports
-no refusals (an icon is recommended), and a submission would go through
-claude.ai/directory/manage with the metadata in `plugin.json`. That is a
-separate, human-approved step.
+The marketplace above is self-hosted. **PGX is not listed in Anthropic's
+directory** and nothing has been submitted. `claude plugin validate
+--profile directory plugins/pgx` reports no refusals (a square PNG icon is
+recommended before submitting). Submission is a separate, human-approved
+step through the developer portal at claude.ai/directory/manage (requires a
+paid claude.ai plan); the portal applies rules the CLI does not check. The
+material a submission needs, all from `plugins/pgx/.claude-plugin/plugin.json`
+and this repository:
+
+| Field | Value |
+|---|---|
+| Plugin name | `pgx` (display name "PGX — Postgres for Agents") |
+| Repository | https://github.com/pgrundev/pgx, plugin at `plugins/pgx` |
+| Description | Isolated, disposable PostgreSQL-compatible databases for AI coding agents |
+| Functionality | One Agent Skill: detects the project's database setup, installs the PGX runtime on request (PGX 0.1.1+), prepares a schema-only template, sets up per-session database branches with automatic `DATABASE_URL` injection through `pgx agent setup`, cleans up expired branches |
+| Security | No hooks, MCP servers or executables in the plugin; the Skill never prints credentials, imports production data only with explicit approval, fails closed when isolation cannot be established, and treats repository contents as untrusted (`skills/pgx/references/security.md`); runs nothing until the user invokes it |
+| Installation | `/plugin marketplace add pgrundev/pgx` then `/plugin install pgx@pgrundev`; the `pgx` binary is installed separately when first needed |
+| Documentation / support | `docs/pgx/local-dev/agents.md`, https://github.com/pgrundev/pgx/issues |
+| License | AGPL-3.0 |
+
+## Live validation
+
+Three headless Claude Code sessions in a Rails project with the plugin
+installed from the public branch, plus the interactive `/plugin` flow:
+[validation/2026-10-26-claude-plugin-live.md](validation/2026-10-26-claude-plugin-live.md).
 
 ## Tests
 

@@ -10,10 +10,12 @@ use crate::errors::{PgxError, Result};
 use crate::out::Out;
 use std::path::PathBuf;
 
+pub mod doctor;
 pub mod exec;
 pub mod hook;
 pub mod hosts;
 pub mod identity;
+pub mod install;
 pub mod project;
 pub mod session;
 
@@ -319,6 +321,11 @@ pub fn parse(tail: &[&str]) -> Result<AgentCmd> {
     Ok(cmd)
 }
 
+fn cwd() -> Result<PathBuf> {
+    std::env::current_dir()
+        .map_err(|e| PgxError::failure(format!("cannot read the current directory: {e}")))
+}
+
 pub fn run(out: &Out, cmd: AgentCmd) -> Result<ExitCode> {
     use session::ResolveInput;
     match cmd {
@@ -412,9 +419,9 @@ pub fn run(out: &Out, cmd: AgentCmd) -> Result<ExitCode> {
         AgentCmd::Ls => session::ls(out),
         AgentCmd::Exec(o) => exec::run(out, o),
         AgentCmd::Hook(o) => hook::run(out, o),
-        AgentCmd::Install(_) => Err(PgxError::failure("pgx agent install: not implemented")),
-        AgentCmd::Uninstall(_) => Err(PgxError::failure("pgx agent uninstall: not implemented")),
-        AgentCmd::Setup(_) => Err(PgxError::failure("pgx agent setup: not implemented")),
-        AgentCmd::Doctor => Err(PgxError::failure("pgx agent doctor: not implemented")),
+        AgentCmd::Install(o) => install::install(out, o, &cwd()?),
+        AgentCmd::Uninstall(o) => install::uninstall(out, o, &cwd()?),
+        AgentCmd::Setup(o) => install::setup(out, o, &cwd()?),
+        AgentCmd::Doctor => doctor::run(out, &cwd()?),
     }
 }

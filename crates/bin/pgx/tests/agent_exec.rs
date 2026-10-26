@@ -79,7 +79,7 @@ fn exec_gives_the_child_its_own_branch_and_retires_it() {
         .stdout
         .lines()
         .find(|l| l.starts_with("BR="))
-        .expect(&r.all());
+        .unwrap_or_else(|| panic!("{}", r.all()));
     assert!(line.contains("BR=agent-sh-"), "{line}");
     assert!(line.contains("SRC=myapp"), "{line}");
     assert!(line.contains("ISO=ok"), "{line}");
@@ -151,7 +151,7 @@ fn exec_forwards_sigterm_and_exits_143() {
     let (p, proj) = up_with_source();
     let mut c = exec_cmd(&p, &proj, &[], &["--", "sh", "-c", "echo READY; sleep 30"]);
     c.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = common::spawn_locked(&mut c).unwrap();
+    let child = common::spawn_locked(&mut c).unwrap();
     // Wait until the branch exists (the child is running).
     let t0 = Instant::now();
     while agent_ls(&p).is_empty() && t0.elapsed() < Duration::from_secs(20) {

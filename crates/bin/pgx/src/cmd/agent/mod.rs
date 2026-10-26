@@ -10,6 +10,7 @@ use crate::errors::{PgxError, Result};
 use crate::out::Out;
 use std::path::PathBuf;
 
+pub mod exec;
 pub mod hook;
 pub mod hosts;
 pub mod identity;
@@ -409,7 +410,7 @@ pub fn run(out: &Out, cmd: AgentCmd) -> Result<ExitCode> {
             Ok(ExitCode::Ok)
         }
         AgentCmd::Ls => session::ls(out),
-        AgentCmd::Exec(_) => Err(PgxError::failure("pgx agent exec: not implemented")),
+        AgentCmd::Exec(o) => exec::run(out, o),
         AgentCmd::Hook(o) => hook::run(out, o),
         AgentCmd::Install(_) => Err(PgxError::failure("pgx agent install: not implemented")),
         AgentCmd::Uninstall(_) => Err(PgxError::failure("pgx agent uninstall: not implemented")),

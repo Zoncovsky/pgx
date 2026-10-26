@@ -13,13 +13,19 @@
 </p>
 
 ```bash
+# Recommended: AI coding agents (Claude Code, Cursor, Codex)
+npx skills add pgrundev/pgx --skill pgx
+
+# Manual PGX installation
 npx pgxdb@latest
 ```
 
 <p align="center">
-  One command: PGX installed, database running, connection URL printed.<br>
+  <strong>Every AI agent gets its own Postgres.</strong><br>
+  Install one Skill. Your coding agent handles the database.<br>
   No Docker required · Native Mac &amp; Linux · Automatic cleanup
 </p>
+<!-- skills.sh badge: add [![skills.sh](https://skills.sh/b/pgrundev/pgx)](https://skills.sh/pgrundev/pgx) once https://skills.sh/pgrundev/pgx lists the skill -->
 
 <p align="center">
   <sub>Open source · Free · v0.1.0 · For disposable databases, not production data</sub>
@@ -388,22 +394,52 @@ permanent or system databases, and resumes cleanup automatically after a
 `pgx stop` / `pgx start`. Details and the identity-safety model are in
 [`docs/pgx/local-dev/ttl.md`](docs/pgx/local-dev/ttl.md).
 
-### Keep your Postgres, branch it in PGX
+### Every AI agent gets its own Postgres
 
-Already have a PostgreSQL database? Copy it into PGX once, then give every
-agent its own branch. The source is only read; PostgreSQL stays your source of
-truth. Two commands explain the product:
+Install the Skill in a project, then ask your agent:
+
+```bash
+npx skills add pgrundev/pgx --skill pgx
+```
+
+> Use PGX to give this project isolated databases for coding agents. Set everything up.
+
+The agent detects your database setup, installs PGX if needed, imports your
+development database **schema-only** into a template (`pgx copy`), writes a
+committed `.pgx.toml`, installs lifecycle hooks (`pgx agent setup`) and
+proves a branch. From then on each Claude Code session gets its own branch
+with `DATABASE_URL` already set, extended while the agent works and removed
+after it stops; two agents never see each other's changes and your
+PostgreSQL is never written. Installing the Skill executes nothing by
+itself: the agent does the setup when the Skill is activated and your
+permissions allow it.
+
+| Host | Automatic isolation | Status |
+|---|---|---|
+| Claude Code | yes, through hooks | verified live |
+| Cursor | hooks installed; `pgx agent exec --` when `PGX_ISOLATION` is unset | env propagation pending live verification |
+| Codex | `pgx agent exec -- codex` (Codex hooks cannot set environment) | wrapper verified |
+
+Details, the lifecycle, security rules and the validation notes:
+[`docs/pgx/local-dev/agents.md`](docs/pgx/local-dev/agents.md). The Skill
+itself: [`skills/pgx/SKILL.md`](skills/pgx/SKILL.md).
+
+### Keep your Postgres, branch it in PGX (by hand)
+
+The same thing without an agent. Copy PostgreSQL into PGX once, then give
+every agent its own branch. The source is only read; PostgreSQL stays your
+source of truth.
 
 ```bash
 PGX_PORT=5433 npx pgxdb@latest                 # PGX beside PostgreSQL on 5432
 
 # Import PostgreSQL once (pg_dump → pg_restore, read-only on the source)
-pgx copy --from "$DATABASE_URL" --to myapp
+pgx copy --from "$DATABASE_URL" --to myapp --schema-only
 
 # Give each AI agent its own database (isolated, self-expiring after 2h)
 pgx branch myapp agent-1
 pgx branch myapp agent-2
-pgx branch myapp agent-3 --ttl 30m             # optional custom TTL
+pgx agent exec -- bin/rails test               # or: any command in a branch of its own
 ```
 
 ```console
@@ -416,11 +452,12 @@ DATABASE_URL:
 postgres://postgres:…@127.0.0.1:5433/agent-1
 ```
 
-`--schema-only` copies the structure without the rows. The copy needs
-`pg_dump`/`pg_restore` on the machine (a PostgreSQL install has them); it
-refuses sources that use extensions PGX does not ship (PostGIS, TimescaleDB,
-…) and never overwrites an existing database. Details, limitations and
-measurements: [`docs/pgx/local-dev/copy.md`](docs/pgx/local-dev/copy.md).
+`--schema-only` copies the structure without the rows (migration bookkeeping
+such as `schema_migrations` is kept, so frameworks see their migrations as
+applied). The copy needs `pg_dump`/`pg_restore` on the machine (a PostgreSQL
+install has them); it refuses sources that use extensions PGX does not ship
+(PostGIS, TimescaleDB, …) and never overwrites an existing database. Details,
+limitations and measurements: [`docs/pgx/local-dev/copy.md`](docs/pgx/local-dev/copy.md).
 
 ### Build from source
 
@@ -525,6 +562,7 @@ any semantic difference (`classify-regress-diffs.py --fail-on-semantic`).
 | [`v0.1-readiness.md`](docs/pgx/v0.1-readiness.md) | what is ready, known limitations, approved use |
 | [`linux-results.md`](docs/pgx/linux-results.md) | the full benchmark report |
 | [`compatibility-gate.md`](docs/pgx/compatibility-gate.md) | how to decide whether a database can run on PGX |
+| [`local-dev/agents.md`](docs/pgx/local-dev/agents.md) | the PGX Skill and `pgx agent`: automatic per-session isolation for Claude Code, Cursor and Codex, with the compatibility matrix |
 | [`local-dev/copy.md`](docs/pgx/local-dev/copy.md) | `pgx copy`: import an existing PostgreSQL database and branch it per agent |
 | [`pgrun-integration.md`](docs/pgx/pgrun-integration.md) | the host-agent API PGRun builds against |
 | [`lifecycle-memory.md`](docs/pgx/lifecycle-memory.md), [`linux-churn.md`](docs/pgx/linux-churn.md) | memory under long churn, and what was fixed |

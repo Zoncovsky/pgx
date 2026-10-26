@@ -111,7 +111,7 @@ pgx copy --from <postgres-url> --to <database> [--schema-only] [--jobs N] [--ver
 |---|---|
 | `--from` | The source: a `postgres://user:password@host:port/db?sslmode=…` URL, a libpq `key=value` string, or a bare database name (libpq's `PG*` variables fill the rest). Usually `"$DATABASE_URL"`. |
 | `--to` | The new PGX database. Must not exist (`pgx copy` never overwrites). Same name rules as `pgx create`. |
-| `--schema-only` | Tables, indexes, constraints, sequences, views, functions, triggers, types and extensions, but no table rows. For a production-sized source this is what you want; agents then run migrations and load fixtures. |
+| `--schema-only` | Tables, indexes, constraints, sequences, views, functions, triggers, types and extensions, but no table rows, except the rows of migration-bookkeeping tables (`schema_migrations`, `ar_internal_metadata`, `django_migrations`, `_prisma_migrations`, `alembic_version`, Flyway, Knex, goose, …) so the framework sees its migrations as applied. For a production-sized source this is what you want; agents then run new migrations and load fixtures. |
 | `--jobs N` | Parallel restore workers (`pg_restore --jobs`). Helps on large sources with many tables and indexes. |
 | `--no-optimize` | Skip the final `VACUUM (FREEZE, ANALYZE)`. Not recommended; see "Why the template is frozen". |
 | `--verbose` | Show `pg_dump` / `pg_restore` output (passwords masked). |

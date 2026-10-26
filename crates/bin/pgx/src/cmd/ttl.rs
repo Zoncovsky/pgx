@@ -69,6 +69,9 @@ pub fn run(out: &Out, name: &str, value: Option<&str>) -> Result<ExitCode> {
                 }
                 crate::ttl::Ttl::Seconds(_) => {
                     let expires_at = ttl.expires_at(now)?;
+                    // An agent branch keeps its session ownership across a manual
+                    // TTL change, so `pgx agent down` still recognises it.
+                    let agent = store.load(name.as_str())?.and_then(|r| r.agent);
                     let rec = TtlRecord {
                         name: name.as_str().to_string(),
                         oid,
@@ -80,6 +83,7 @@ pub fn run(out: &Out, name: &str, value: Option<&str>) -> Result<ExitCode> {
                         state: State::Active,
                         last_attempt: None,
                         last_error: None,
+                        agent,
                     };
                     store.save(&rec)?;
                     out.emit(

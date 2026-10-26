@@ -72,6 +72,7 @@ pub fn record_ttl(
                 state: crate::ttlstore::State::Active,
                 last_attempt: None,
                 last_error: None,
+                agent: None,
             };
             store.save(&rec)?;
         }

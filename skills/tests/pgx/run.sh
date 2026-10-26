@@ -57,8 +57,10 @@ done
 grep -rnE 'postgres://[^*$"<` ]+:[^*$"<` ]+@' "$skill/SKILL.md" "$skill/references" | grep -v '\.\.\.' | grep -v '…' | grep -v 'postgres://postgres:\*\*\*' >/dev/null && bad "a credentialed URL appears in the skill text" || ok "no credentialed URLs"
 grep -rn '/Users/\|/home/alex' "$skill/SKILL.md" "$skill/references" "$skill/scripts" >/dev/null && bad "machine-specific path in the skill" || ok "no machine-specific paths"
 
-# 3. detect-project.sh against fixtures.
+# 3. detect-project.sh against fixtures. (git keeps no empty directories; the
+#    "empty" fixture has only a README, which the script does not look at.)
 det="$skill/scripts/detect-project.sh"
+mkdir -p "$here/fixtures/empty"
 [ -x "$det" ] || bad "scripts/detect-project.sh is not executable"
 j() { PATH=/usr/bin:/bin "$det" "$here/fixtures/$1"; }
 check() { # name jq-like python expr

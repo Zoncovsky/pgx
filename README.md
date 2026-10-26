@@ -28,7 +28,7 @@ npx pgxdb@latest
 <!-- skills.sh badge: add [![skills.sh](https://skills.sh/b/pgrundev/pgx)](https://skills.sh/pgrundev/pgx) once https://skills.sh/pgrundev/pgx lists the skill -->
 
 <p align="center">
-  <sub>Open source · Free · v0.1.0 · For disposable databases, not production data</sub>
+  <sub>Open source · Free · v0.1.1 · For disposable databases, not production data</sub>
 </p>
 
 PGX is a database runtime for short-lived Postgres databases: agent
@@ -273,8 +273,8 @@ applies to memory and to storage alike.
 
 ## Status
 
-PGX is at **v0.1.0**, an early release with known limitations listed in the
-[release notes](https://github.com/pgrundev/pgx/releases/tag/v0.1.0). It
+PGX is at **v0.1.1**, an early release with known limitations listed in the
+[release notes](https://github.com/pgrundev/pgx/releases/tag/v0.1.1). It
 already powers PGX branches in PGRun. The current focus is PostgreSQL compatibility,
 Rails/application compatibility, concurrency semantics, lifecycle
 correctness, predictable resource containment and real agent workloads.

@@ -7,11 +7,13 @@ command -v pgx && pgx --json version      # {"pgx_version":"0.1.x", …}
 pgx --json status                         # exit 3 when initialised but stopped; hooks start it on demand
 ```
 
-The skill needs the `pgx agent` command group: `pgx agent --help` must exit 0
-(it ships from PGX 0.1.1; do not trust the version number alone, a build from
-source may report an older one). A binary that lacks it: upgrade with the
-method it was installed with (`npm i -g pgxdb@latest`, or the installer again)
-once a release with `pgx agent` is published.
+The skill needs **PGX 0.1.1 or newer**, the first release with the
+`pgx agent` command group. Check `pgx --json version` → `pgx_version`
+(compare as semver: 0.1.1 ≤ 0.1.1 < 0.2.0), or run `pgx agent ls`, which
+exits 2 with "unknown command" on an older binary. Do not use `pgx agent
+--help` as the test: `--help` prints the global help on every version. An
+older binary: upgrade with the method it was installed with (`npm i -g
+pgxdb@latest`, or the installer again) and re-check the version.
 
 ## Install, in order of preference
 

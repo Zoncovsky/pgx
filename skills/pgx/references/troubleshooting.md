@@ -18,7 +18,7 @@ Start with `pgx agent doctor` (project state, this session) and `pgx doctor`
 | Codex commands cannot connect, `CODEX_SANDBOX_NETWORK_DISABLED=1` | Sandbox blocks loopback. | `sandbox_workspace_write.network_access = true` (user's decision). |
 | Rails created `agent-…-0/1/2` databases | Parallel tests. | Harmless; `PARALLEL_WORKERS=1` or `pgx drop` them. |
 | `ActiveRecord::EnvironmentMismatchError` after a green test run | The branch's `ar_internal_metadata` says `development`; Rails' `db:test:prepare` refuses to purge it. | Harmless; ignore. Never `db:environment:set` inside a branch. |
-| Rails re-ran every migration on a fresh branch and failed on an existing table | The template was imported schema-only with an older `pgx copy` that dropped `schema_migrations` rows. | Re-import with a `pgx` that has `pgx agent` (its `--schema-only` keeps migration bookkeeping) or insert the rows into the template once. |
+| Rails re-ran every migration on a fresh branch and failed on an existing table | The template was imported schema-only with an older `pgx copy` that dropped `schema_migrations` rows. | Re-import with PGX 0.1.1 or newer (its `--schema-only` keeps migration bookkeeping) or insert the rows into the template once. |
 | Port conflict on first run | Another service on the chosen port. | `pgx doctor`; `PGX_PORT=<free> pgx run` on a fresh home only; never `init --force`. |
 
 Logs: `~/.pgx/log/` (runtime and supervisor). Records of agent branches:

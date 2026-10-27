@@ -2,7 +2,8 @@
 # Tests for the PGX Claude Code plugin package: manifest and marketplace
 # validation, no drift from the canonical skill, packaging hygiene, and a real
 # install/enable/disable/update/uninstall cycle from a local marketplace in an
-# isolated Claude configuration directory. Needs the `claude` CLI (2.1.3xx);
+# isolated Claude configuration directory, and the same for the standalone
+# repository tree that plugins/sync.sh --standalone assembles. Needs the `claude` CLI (2.1.3xx);
 # no login, no network, no paid calls. Usage: plugins/tests/pgx/run.sh
 set -uo pipefail
 repo=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -98,5 +99,30 @@ find "$cache" -name '*.rs' -o -name Cargo.toml | grep -q . && bad "Rust sources 
 out=$(claude plugin uninstall pgx@pgrundev --json 2>&1); [ "$(printf '%s' "$out" | j 'd["outcome"]')" = ok ] && ok "uninstall (user scope)" || bad "uninstall: $out"
 out=$(cd "$tmp/proj" && claude plugin install pgx@pgrundev --json 2>&1); [ "$(printf '%s' "$out" | j 'd["outcome"]')" = ok ] && ok "reinstall" || bad "reinstall: $out"
 out=$(claude plugin marketplace remove pgrundev --json 2>&1); [ "$(printf '%s' "$out" | j 'd["outcome"]')" = ok ] && ok "marketplace remove" || bad "marketplace remove: $out"
+
+# 6. The standalone plugin repository (pgrundev/pgx-plugin) as plugins/sync.sh --standalone assembles it:
+#    valid on its own, acceptable to the directory profile, a one-entry marketplace rooted at "./",
+#    and installable from a clone of it (what `claude plugin marketplace add pgrundev/pgx-plugin` does).
+sa="$tmp/standalone"
+"$repo/plugins/sync.sh" --standalone "$sa" >/dev/null 2>&1 && ok "sync.sh --standalone assembles" || bad "sync.sh --standalone failed"
+"$repo/plugins/sync.sh" --check-standalone "$sa" >/dev/null 2>&1 && ok "sync.sh --check-standalone: fresh assembly has no drift" || bad "check-standalone reports drift on a fresh assembly"
+echo "x" >> "$sa/README.md"; "$repo/plugins/sync.sh" --check-standalone "$sa" >/dev/null 2>&1 && bad "check-standalone missed a modified README" || ok "check-standalone detects drift"
+"$repo/plugins/sync.sh" --standalone "$sa" >/dev/null 2>&1
+for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json skills/pgx/SKILL.md README.md LICENSE .github/workflows/validate.yml; do [ -f "$sa/$f" ] || bad "standalone tree lacks $f"; done; ok "standalone tree: manifest, marketplace, skill, README, LICENSE, workflow"
+diff -r "$plugin/skills/pgx" "$sa/skills/pgx" >/dev/null && cmp -s "$plugin/.claude-plugin/plugin.json" "$sa/.claude-plugin/plugin.json" && cmp -s "$repo/LICENSE" "$sa/LICENSE" && ok "standalone skill, manifest and LICENSE are byte-identical to the canonical ones" || bad "standalone tree differs from plugins/pgx / LICENSE"
+find "$sa" -type l | grep -q . && bad "symlinks in the standalone tree" || ok "standalone: no symlinks"
+ssize=$(du -sk "$sa" | cut -f1); [ "$ssize" -lt 256 ] && ok "standalone tree ${ssize} KB (< 256 KB)" || bad "standalone tree too large: ${ssize} KB"
+claude plugin validate --strict "$sa" >/tmp/sv.out 2>&1 && ok "claude plugin validate --strict (standalone root: plugin + marketplace)" || bad "standalone validate: $(tail -5 /tmp/sv.out)"
+claude plugin validate --profile directory "$sa" >/tmp/sd.out 2>&1 && ok "standalone: directory profile, no refusals" || bad "standalone directory profile: $(grep -E '✘|refuses' /tmp/sd.out | head -3)"
+grep -q 'treats such a folder as a plugin' /tmp/sd.out && ok "directory profile treats the standalone root as the plugin" || bad "directory profile did not treat the root as a plugin"
+( cd "$sa" && git init -q . && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init )
+out=$(claude plugin marketplace add "$sa" --json 2>&1); [ "$(printf '%s' "$out" | j 'd["outcome"]')" = ok ] && ok "marketplace add (standalone clone) -> pgx-plugin" || bad "standalone marketplace add: $out"
+out=$(cd "$tmp/proj" && claude plugin install pgx@pgx-plugin --scope local --json 2>&1); [ "$(printf '%s' "$out" | j 'd["outcome"]')" = ok ] && ok "install pgx@pgx-plugin (local scope)" || bad "standalone install: $out"
+det=$(cd "$tmp/proj" && claude plugin details pgx 2>&1)
+printf '%s' "$det" | grep -qE 'Skills \(1\) +pgx' && printf '%s' "$det" | grep -q 'Hooks (0)' && printf '%s' "$det" | grep -q 'MCP servers (0)' && ok "standalone details: Skills (1) pgx, Hooks (0), MCP servers (0)" || bad "standalone details: $det"
+cache=$(cd "$tmp/proj" && claude plugin list --json 2>/dev/null | python3 -I -c 'import json,sys; print([p for p in json.load(sys.stdin) if p["id"]=="pgx@pgx-plugin"][0]["installPath"])')
+[ -f "$cache/skills/pgx/SKILL.md" ] && [ ! -e "$cache/.git" ] && ok "standalone cache holds the skill, no .git" || bad "standalone cache: $cache"
+out=$(cd "$tmp/proj" && claude plugin uninstall pgx@pgx-plugin --scope local --json 2>&1); [ "$(printf '%s' "$out" | j 'd["outcome"]')" = ok ] && ok "uninstall pgx@pgx-plugin" || bad "standalone uninstall: $out"
+out=$(claude plugin marketplace remove pgx-plugin --json 2>&1); [ "$(printf '%s' "$out" | j 'd["outcome"]')" = ok ] && ok "marketplace remove pgx-plugin" || bad "standalone marketplace remove: $out"
 echo "scratch: $tmp"
 [ "$fail" -eq 0 ] && echo "ALL PLUGIN TESTS PASSED" || { echo "PLUGIN TESTS FAILED"; exit 1; }

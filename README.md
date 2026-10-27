@@ -13,9 +13,9 @@
 </p>
 
 ```text
-# Claude Code: install inside a session (native plugin)
-/plugin marketplace add pgrundev/pgx
-/plugin install pgx@pgrundev
+# Claude Code: install inside a session (native plugin, lightweight repository)
+/plugin marketplace add pgrundev/pgx-plugin
+/plugin install pgx@pgx-plugin
 ```
 
 ```bash
@@ -405,10 +405,17 @@ permanent or system databases, and resumes cleanup automatically after a
 Install the Skill, then ask your agent. In Claude Code, from inside a session:
 
 ```text
-/plugin marketplace add pgrundev/pgx
-/plugin install pgx@pgrundev
+/plugin marketplace add pgrundev/pgx-plugin
+/plugin install pgx@pgx-plugin
 /pgx:pgx Set up isolated Postgres databases for this project.
 ```
+
+[`pgrundev/pgx-plugin`](https://github.com/pgrundev/pgx-plugin) holds only
+the plugin (about 110 KB, generated from this repository on every change to
+`main`), so the install takes seconds. Adding this repository itself as the
+marketplace still works (`/plugin marketplace add pgrundev/pgx`, then
+`/plugin install pgx@pgrundev`) but clones about 2 GB. Install from one of
+the two, not both.
 
 For Cursor, Codex or several hosts at once, the Agent Skills CLI installs the
 same Skill into the project:
@@ -587,7 +594,7 @@ any semantic difference (`classify-regress-diffs.py --fail-on-semantic`).
 | [`v0.1-readiness.md`](docs/pgx/v0.1-readiness.md) | what is ready, known limitations, approved use |
 | [`linux-results.md`](docs/pgx/linux-results.md) | the full benchmark report |
 | [`compatibility-gate.md`](docs/pgx/compatibility-gate.md) | how to decide whether a database can run on PGX |
-| [`local-dev/claude-plugin.md`](docs/pgx/local-dev/claude-plugin.md) | the PGX plugin for Claude Code: `/plugin marketplace add pgrundev/pgx`, `/plugin install pgx@pgrundev`, how it relates to the Skills CLI install, updates, removal |
+| [`local-dev/claude-plugin.md`](docs/pgx/local-dev/claude-plugin.md) | the PGX plugin for Claude Code: `/plugin marketplace add pgrundev/pgx-plugin`, `/plugin install pgx@pgx-plugin`, the lightweight `pgrundev/pgx-plugin` repository and how it is generated, how it relates to the Skills CLI install, updates, removal, the Anthropic directory submission |
 | [`local-dev/agents.md`](docs/pgx/local-dev/agents.md) | the PGX Skill and `pgx agent`: automatic per-session isolation for Claude Code, Cursor and Codex, with the compatibility matrix |
 | [`local-dev/copy.md`](docs/pgx/local-dev/copy.md) | `pgx copy`: import an existing PostgreSQL database and branch it per agent |
 | [`pgrun-integration.md`](docs/pgx/pgrun-integration.md) | the host-agent API PGRun builds against |

@@ -80,7 +80,7 @@ check empty "d['framework']=='unknown' and d['database_config']['classification'
 check sensitive "d['database_config']['classification']=='sensitive'"
 check empty "d['pgx']['installed']==False"
 check remote-ssl "d['database_config']['classification']=='sensitive'"
-grep -q '0.1.1 or newer' "$skill/SKILL.md" && ! grep -qE 'pgx agent --help. must succeed' "$skill/SKILL.md" && ok "SKILL.md gates on PGX 0.1.1, not on --help" || bad "SKILL.md must gate on version 0.1.1 (pgx agent --help exits 0 on old binaries)"
+grep -q '0.1.2 or newer' "$skill/SKILL.md" && ! grep -q '0.1.1 or newer' "$skill/SKILL.md" && ! grep -qE 'pgx agent --help. must succeed' "$skill/SKILL.md" && ok "SKILL.md gates on PGX 0.1.2, not on --help" || bad "SKILL.md must gate on version 0.1.2 (0.1.1 shares the parent's branch with subagents; pgx agent --help exits 0 on old binaries)"
 grep -q 'scripts/detect-project.sh' "$skill/SKILL.md" && grep -qE '\.claude/skills/pgx/scripts/detect-project\.sh|\.agents/skills/pgx/scripts/detect-project\.sh' "$skill/SKILL.md" && ok "SKILL.md names the installed script paths" || bad "SKILL.md must name the installed script paths"
 # Secrets never leak into the output.
 for f in django prisma node sensitive remote-ssl; do

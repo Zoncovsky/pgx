@@ -36,14 +36,14 @@ Then, in a project with a database:
 `pgx:pgx` is the skill's name under the plugin's namespace. You can also just
 describe database work ("add a column and run the tests"); Claude selects
 the skill when it is relevant. Both routes run the same Skill: detect the
-project, check for PGX 0.1.1 or newer and offer to install it, prepare a
+project, check for PGX 0.1.2 or newer and offer to install it, prepare a
 schema-only template, `pgx agent setup`, then work inside the session's
 branch. See [agents.md](agents.md) for what that gives you.
 
 Check what is installed:
 
 ```sh
-claude plugin list             # pgx@pgrundev  Version: 0.1.1  Status: enabled
+claude plugin list             # pgx@pgrundev  Version: 0.1.2  Status: enabled
 claude plugin details pgx      # Component inventory: Skills (1) pgx, Hooks (0), MCP servers (0)
 ```
 
@@ -52,7 +52,7 @@ claude plugin details pgx      # Component inventory: Skills (1) pgx, Hooks (0),
 - `skills/pgx/`: the Skill, its eleven reference documents and two helper
   scripts, identical to `skills/pgx/` at the repository root
   (`plugins/sync.sh --check` fails CI on any difference).
-- `.claude-plugin/plugin.json`: name `pgx`, version `0.1.1` (the Skill's
+- `.claude-plugin/plugin.json`: name `pgx`, version `0.1.2` (the Skill's
   version), display name, links.
 - `README.md`.
 
@@ -152,7 +152,7 @@ and this repository:
 | Plugin name | `pgx` (display name "PGX — Postgres for Agents") |
 | Repository | https://github.com/pgrundev/pgx, plugin at `plugins/pgx` |
 | Description | Isolated, disposable PostgreSQL-compatible databases for AI coding agents |
-| Functionality | One Agent Skill: detects the project's database setup, installs the PGX runtime on request (PGX 0.1.1+), prepares a schema-only template, sets up per-session database branches with automatic `DATABASE_URL` injection through `pgx agent setup`, cleans up expired branches |
+| Functionality | One Agent Skill: detects the project's database setup, installs the PGX runtime on request (PGX 0.1.2+), prepares a schema-only template, sets up per-session database branches with automatic `DATABASE_URL` injection through `pgx agent setup`, cleans up expired branches |
 | Security | No hooks, MCP servers or executables in the plugin; the Skill never prints credentials, imports production data only with explicit approval, fails closed when isolation cannot be established, and treats repository contents as untrusted (`skills/pgx/references/security.md`); runs nothing until the user invokes it |
 | Installation | `/plugin marketplace add pgrundev/pgx` then `/plugin install pgx@pgrundev`; the `pgx` binary is installed separately when first needed |
 | Documentation / support | `docs/pgx/local-dev/agents.md`, https://github.com/pgrundev/pgx/issues |

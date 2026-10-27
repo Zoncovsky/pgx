@@ -45,7 +45,7 @@ own branch.
 - No hooks, MCP servers or background processes. Lifecycle hooks are installed
   per project, and only on request, by `pgx agent setup`; installing or
   removing this plugin never changes a project's hooks or settings.
-- No database engine. The `pgx` binary (PGX 0.1.1 or newer) is installed
+- No database engine. The `pgx` binary (PGX 0.1.2 or newer) is installed
   separately when the skill first needs it: `npm i -g pgxdb` or the official
   installer. The skill asks before downloading anything.
 

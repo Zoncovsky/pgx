@@ -112,11 +112,22 @@ jobs:
         run: |
           cd artifacts && find . -name '*.sha256' -exec cat {} \; > ../checksums.txt
           cat ../checksums.txt
+      # The release notes live in the repository; without a checkout the
+      # action logged `Failed to read body_path "dist/release-notes.md"
+      # (ENOENT)` and published an empty body (v0.1.1 and the v0.1.2 draft,
+      # which was filled in by hand). Only that one file is needed.
+      - name: Check out the release notes
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: dist/release-notes.md
+          sparse-checkout-cone-mode: false
       - name: Create draft release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          name: PGX ${{ github.ref_name }}
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.tar.gz.sha256
+            checksums.txt
           body_path: dist/release-notes.md
